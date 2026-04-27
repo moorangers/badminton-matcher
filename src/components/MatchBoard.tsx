@@ -1,10 +1,11 @@
 import {
+  ArrowLeftRight,
   Check,
   CheckCircle2,
   Coffee,
   Pause,
   Play,
-  // RotateCcw,
+  RotateCcw,
   Swords,
   // XCircle,
 } from 'lucide-react';
@@ -35,6 +36,9 @@ interface MatchBoardProps {
   onFinish?: (court: number) => void;
   onRematch?: (court: number) => void;
   onCancel?: (court: number) => void;
+  onSubstitutePlayer?: (playerId: string) => void;
+  canUndoLatest?: boolean;
+  onUndoLatest?: () => void;
 }
 
 const statusConfig: Record<
@@ -72,18 +76,21 @@ export const MatchBoard = ({
   onFinish,
   onRematch,
   onCancel,
+  onSubstitutePlayer,
+  canUndoLatest = false,
+  onUndoLatest,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
 
   return (
-    <div className='space-y-4'>
-      <div className='flex items-center justify-between'>
-        <h3 className='font-display text-base font-extrabold text-foreground'>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="font-display text-base font-extrabold text-foreground">
           {title}
         </h3>
       </div>
 
-      <div className='space-y-3'>
+      <div className="space-y-3">
         {matches.map((m) => {
           const cfg = statusConfig[m.status];
           const StatusIcon = cfg.icon;
@@ -103,12 +110,12 @@ export const MatchBoard = ({
                 statusClassName,
               )}
             >
-              <div className='flex items-center justify-between bg-secondary px-4 py-2.5'>
-                <div className='flex items-center gap-2'>
-                  <span className='font-display text-xs font-extrabold uppercase tracking-widest text-secondary-foreground'>
+              <div className="flex items-center justify-between bg-secondary px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="font-display text-xs font-extrabold uppercase tracking-widest text-secondary-foreground">
                     Court {m.court}
                   </span>
-                  <span className='text-[10px] font-semibold uppercase tracking-wider text-secondary-foreground/60'>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary-foreground/60">
                     · {mode === 'singles' ? '1v1' : '2v2'}
                   </span>
                 </div>
@@ -119,14 +126,21 @@ export const MatchBoard = ({
                   )}
                 >
                   <span className={cn('h-1.5 w-1.5 rounded-full', cfg.dot)} />
-                  <StatusIcon className='h-3 w-3' />
+                  <StatusIcon className="h-3 w-3" />
                   {cfg.label}
                 </span>
               </div>
 
-              <div className='grid grid-cols-[1fr_auto_1fr] items-center gap-2 p-4'>
-                <TeamColumn label='Team A' players={m.teamA} accent='blue' />
-                <div className='flex flex-col items-center'>
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 p-4">
+                <TeamColumn
+                  label="Team A"
+                  players={m.teamA}
+                  accent="blue"
+                  matchStatus={m.status}
+                  showSubstitute={showActions}
+                  onSubstitute={onSubstitutePlayer}
+                />
+                <div className="flex flex-col items-center">
                   <div
                     className={cn(
                       'flex h-9 w-9 items-center justify-center rounded-full transition-smooth',
@@ -135,44 +149,67 @@ export const MatchBoard = ({
                         : 'bg-muted text-muted-foreground shadow-soft',
                     )}
                   >
-                    <Swords className='h-4 w-4' />
+                    <Swords className="h-4 w-4" />
                   </div>
-                  <span className='mt-1 font-display text-[10px] font-extrabold tracking-widest text-secondary'>
+                  <span className="mt-1 font-display text-[10px] font-extrabold tracking-widest text-secondary">
                     VS
                   </span>
                 </div>
                 <TeamColumn
-                  label='Team B'
+                  label="Team B"
                   players={m.teamB}
-                  align='right'
-                  accent='red'
+                  align="right"
+                  accent="red"
+                  matchStatus={m.status}
+                  showSubstitute={showActions}
+                  onSubstitute={onSubstitutePlayer}
                 />
               </div>
 
-              <div className='border-t border-border/70 px-4 py-3'>
+              <div className="border-t border-border/70 px-4 py-3">
                 {showActions ? (
-                  <div className='flex flex-wrap items-center gap-2 justify-between'>
-                    <Button
-                      type='button'
-                      size='sm'
-                      onClick={() => onStatusChange?.(m.court, 'playing')}
-                      disabled={m.status === 'playing'}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold'
-                    >
-                      <Play className='h-3.5 w-3.5' />
-                      เริ่ม
-                    </Button>
-                    <Button
-                      type='button'
-                      size='sm'
-                      variant='secondary'
-                      onClick={() => onFinish?.(m.court)}
-                      disabled={m.status !== 'playing'}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold'
-                    >
-                      <CheckCircle2 className='h-3.5 w-3.5' />
-                      จบแมตช์
-                    </Button>
+                  <div className="flex items-center justify-between gap-2 overflow-x-auto">
+                    <div className="flex flex-nowrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => onStatusChange?.(m.court, 'playing')}
+                        disabled={m.status === 'playing'}
+                        className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        เริ่ม
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => onFinish?.(m.court)}
+                        disabled={m.status !== 'playing'}
+                        className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
+                      >
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        จบแมตช์
+                      </Button>
+                    </div>
+                    <div className="flex shrink-0 justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => onUndoLatest?.()}
+                        disabled={!canUndoLatest}
+                        className={cn(
+                          'h-8 w-auto rounded-full px-2.5 font-display text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:bg-muted/60 hover:text-foreground',
+                          canUndoLatest
+                            ? 'opacity-85'
+                            : 'pointer-events-none opacity-0 sm:translate-y-1',
+                        )}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                        ย้อนกลับล่าสุด
+                      </Button>
+                    </div>
                     {/* <Button
                       type='button'
                       size='sm'
@@ -195,7 +232,7 @@ export const MatchBoard = ({
                     </Button> */}
                   </div>
                 ) : (
-                  <p className='text-xs font-medium text-muted-foreground'>
+                  <p className="text-xs font-medium text-muted-foreground">
                     ตัวอย่างรอบถัดไป (Preview)
                   </p>
                 )}
@@ -206,21 +243,21 @@ export const MatchBoard = ({
       </div>
 
       {showActions && nextMatches.length > 0 && (
-        <div className='rounded-2xl border border-dashed border-border bg-muted/40 p-4'>
-          <div className='space-y-2'>
+        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+          <div className="space-y-2">
             {nextMatches.map((match) => (
-              <div key={`next-${match.court}`} className='text-xs'>
-                <p className='flex items-center gap-2 font-medium text-foreground'>
-                  <span className='shrink-0 font-display font-bold text-muted-foreground'>
-                    คู่ถัดไป:
+              <div key={`next-${match.court}`} className="text-xs">
+                <p className="flex items-center gap-2 font-medium text-foreground">
+                  <span className="shrink-0 font-display font-bold text-muted-foreground">
+                    คู่ถัดไป (Court {match.court})
                   </span>
 
-                  <span className='min-w-0 truncate rounded-full border border-tertiary/30 bg-tertiary/10 px-3 py-1 text-tertiary shadow-sm'>
+                  <span className="min-w-0 truncate rounded-full border border-tertiary/30 bg-tertiary/10 px-3 py-1 text-tertiary shadow-sm">
                     Team A:{' '}
                     {match.teamA.map((player) => player.name).join(', ')}
                   </span>
 
-                  <span className='min-w-0 truncate rounded-full border border-destructive/30 bg-destructive/10 px-3 py-1 text-destructive shadow-sm'>
+                  <span className="min-w-0 truncate rounded-full border border-destructive/30 bg-destructive/10 px-3 py-1 text-destructive shadow-sm">
                     Team B:{' '}
                     {match.teamB.map((player) => player.name).join(', ')}
                   </span>
@@ -232,30 +269,30 @@ export const MatchBoard = ({
       )}
 
       {showActions && restingPlayers.length > 0 && (
-        <div className='rounded-2xl border border-dashed border-border bg-muted/40 p-4'>
-          <div className='mb-2 flex items-center justify-between'>
-            <div className='flex items-center gap-2'>
-              <div className='flex h-6 w-6 items-center justify-center rounded-md bg-secondary/10 text-secondary'>
-                <Coffee className='h-3.5 w-3.5' />
+        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-secondary/10 text-secondary">
+                <Coffee className="h-3.5 w-3.5" />
               </div>
-              <h4 className='font-display text-xs font-bold uppercase tracking-wider text-muted-foreground'>
+              <h4 className="font-display text-xs font-bold uppercase tracking-wider text-muted-foreground">
                 กำลังพัก
               </h4>
             </div>
-            <span className='rounded-full bg-card px-2 py-0.5 font-display text-[11px] font-bold text-muted-foreground'>
+            <span className="rounded-full bg-card px-2 py-0.5 font-display text-[11px] font-bold text-muted-foreground">
               {restingPlayers.length}
             </span>
           </div>
-          <div className='flex flex-wrap gap-1.5'>
+          <div className="flex flex-wrap gap-1.5">
             {restingPlayers.map((p) => (
               <span
                 key={p.id}
-                className='flex items-center gap-1 rounded-full bg-card px-2.5 py-1 font-display text-xs font-semibold text-foreground shadow-sm'
+                className="flex items-center gap-1 rounded-full bg-card px-2.5 py-1 font-display text-xs font-semibold text-foreground shadow-sm"
               >
-                <Pause className='h-2.5 w-2.5 text-muted-foreground' />
+                <Pause className="h-2.5 w-2.5 text-muted-foreground" />
                 {p.name}
                 {p.matches > 0 && (
-                  <span className='ml-0.5 rounded-full bg-muted px-1.5 text-[10px] font-bold text-muted-foreground'>
+                  <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] font-bold text-muted-foreground">
                     {p.matches}
                   </span>
                 )}
@@ -273,33 +310,70 @@ const TeamColumn = ({
   players,
   align = 'left',
   accent,
+  matchStatus,
+  showSubstitute = false,
+  onSubstitute,
 }: {
   label: string;
   players: Player[];
   align?: 'left' | 'right';
   accent: 'blue' | 'red';
-}) => (
-  <div className={align === 'right' ? 'text-right' : 'text-left'}>
-    <div
-      className={cn(
-        'mb-1.5 font-display text-[10px] font-bold uppercase tracking-widest',
-        accent === 'blue' ? 'text-tertiary' : 'text-destructive',
-      )}
-    >
-      {label}
+  matchStatus?: MatchStatus;
+  showSubstitute?: boolean;
+  onSubstitute?: (playerId: string) => void;
+}) => {
+  const canSub = showSubstitute;
+
+  return (
+    <div className={align === 'right' ? 'text-right' : 'text-left'}>
+      <div
+        className={cn(
+          'mb-1.5 font-display text-[10px] font-bold uppercase tracking-widest',
+          accent === 'blue' ? 'text-tertiary' : 'text-destructive',
+        )}
+      >
+        {label}
+      </div>
+      <div className="space-y-1">
+        {players.map((p) => (
+          <div
+            key={p.id}
+            className={cn(
+              'flex items-center gap-1',
+              align === 'right' ? 'justify-end' : 'justify-start',
+            )}
+          >
+            {canSub && align === 'right' && (
+              <button
+                type="button"
+                onClick={() => onSubstitute?.(p.id)}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                aria-label={`เปลี่ยนตัว ${p.name}`}
+              >
+                <ArrowLeftRight className="h-2.5 w-2.5" />
+              </button>
+            )}
+            <span
+              className={cn(
+                'truncate font-display text-sm font-bold',
+                accent === 'blue' ? 'text-tertiary' : 'text-destructive',
+              )}
+            >
+              {p.name}
+            </span>
+            {canSub && align === 'left' && (
+              <button
+                type="button"
+                onClick={() => onSubstitute?.(p.id)}
+                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                aria-label={`เปลี่ยนตัว ${p.name}`}
+              >
+                <ArrowLeftRight className="h-2.5 w-2.5" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
-    <div className='space-y-1'>
-      {players.map((p) => (
-        <div
-          key={p.id}
-          className={cn(
-            'truncate font-display text-sm font-bold',
-            accent === 'blue' ? 'text-tertiary' : 'text-destructive',
-          )}
-        >
-          {p.name}
-        </div>
-      ))}
-    </div>
-  </div>
-);
+  );
+};

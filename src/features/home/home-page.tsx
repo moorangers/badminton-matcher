@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useLocalStorage } from '@/lib/useLocalStorage';
 import { Icon } from '@iconify/react';
 import {
   // BookOpenText,
@@ -10,6 +11,7 @@ import {
   Sparkles,
   Trash2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
 import { CourtSelector } from '@/components/CourtSelector';
 import {
@@ -21,21 +23,60 @@ import { ModeSelector, type Mode } from '@/components/ModeSelector';
 import { PlayerList, type Player } from '@/components/PlayerList';
 import { Button } from '@/components/ui/button';
 
-const APP_VERSION = 'v0.1.0';
+const APP_VERSION = 'v0.2.0';
 
-type Snackbar = {
-  title: string;
-  description: string;
-  variant: 'success' | 'error' | 'info';
+type PendingSubstitute = {
+  playerId: string;
+  playerName: string;
+  court: number;
 };
 
 export function HomePage() {
-  const [mode, setMode] = useState<Mode>('doubles');
-  const [courts, setCourts] = useState<number>(1);
-  const [players, setPlayers] = useState<Player[]>([]);
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [nextMatches, setNextMatches] = useState<Match[]>([]);
-  const [snackbar, setSnackbar] = useState<Snackbar | null>(null);
+  const [mode, setMode] = useLocalStorage<Mode>('bm_mode', 'doubles');
+  const [courts, setCourts] = useLocalStorage<number>('bm_courts', 1);
+  const [players, setPlayers] = useLocalStorage<Player[]>('bm_players', []);
+  const [matches, setMatches] = useLocalStorage<Match[]>('bm_matches', []);
+  const [nextMatches, setNextMatches] = useLocalStorage<Match[]>(
+    'bm_nextMatches',
+    [],
+  );
+  const [pendingSubstitute, setPendingSubstitute] =
+    useState<PendingSubstitute | null>(null);
+
+  type UndoSnapshot = {
+    players: Player[];
+    matches: Match[];
+    nextMatches: Match[];
+    label: string;
+  };
+  const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
+
+  const pushUndo = (label: string) => {
+    setUndoStack((prev) => [
+      ...prev.slice(-4),
+      { players, matches, nextMatches, label },
+    ]);
+  };
+
+  const undoLast = () => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const snapshot = prev[prev.length - 1];
+      setPlayers(snapshot.players);
+      setMatches(snapshot.matches);
+      setNextMatches(snapshot.nextMatches);
+      return prev.slice(0, -1);
+    });
+  };
+
+  const undoLatest = () => {
+    const label = undoStack[undoStack.length - 1]?.label;
+    undoLast();
+    toast.success('ย้อนกลับแล้ว', {
+      description: label ? `ยกเลิก: ${label}` : undefined,
+      duration: 2500,
+    });
+  };
 
   const playersPerMatch = mode === 'singles' ? 2 : 4;
   const requiredPlayers = playersPerMatch * courts;
@@ -62,15 +103,60 @@ export function HomePage() {
     };
   }, [matches, players]);
 
-  const showSnackbar = (nextSnackbar: Snackbar) => {
-    setSnackbar(nextSnackbar);
+  const showSnackbar = ({
+    title,
+    description,
+    variant,
+  }: {
+    title: string;
+    description: string;
+    variant: 'success' | 'error' | 'info';
+  }) => {
+    const options = { description, duration: 3000 };
+    if (variant === 'success') {
+      toast.success(title, options);
+      return;
+    }
+    if (variant === 'error') {
+      toast.error(title, options);
+      return;
+    }
+    toast(title, options);
   };
 
-  const buildMatchesFromPlayers = (sourcePlayers: Player[]) => {
-    const sorted = [...sourcePlayers].sort((a, b) => a.matches - b.matches);
+  const getRoundPlayerIds = (sourceMatches: Match[]) => {
+    return new Set(
+      sourceMatches
+        .flatMap((match) => [...match.teamA, ...match.teamB])
+        .map((player) => player.id),
+    );
+  };
+
+  const getActivePlayerIds = (sourceMatches: Match[]) => {
+    return new Set(
+      sourceMatches
+        .filter((match) => match.status !== 'done')
+        .flatMap((match) => [...match.teamA, ...match.teamB])
+        .map((player) => player.id),
+    );
+  };
+
+  const shufflePlayers = (sourcePlayers: Player[]) => {
+    const output = [...sourcePlayers];
+    for (let i = output.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [output[i], output[j]] = [output[j], output[i]];
+    }
+    return output;
+  };
+
+  const rankCandidates = (
+    sourcePlayers: Player[],
+    recentlyPlayedIds: Set<string>,
+  ) => {
     const grouped = new Map<number, Player[]>();
 
-    sorted.forEach((player) => {
+    sourcePlayers.forEach((player) => {
       const tier = grouped.get(player.matches) ?? [];
       tier.push(player);
       grouped.set(player.matches, tier);
@@ -81,12 +167,28 @@ export function HomePage() {
       .sort((a, b) => a - b)
       .forEach((key) => {
         const tier = grouped.get(key)!;
-        for (let i = tier.length - 1; i > 0; i -= 1) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [tier[i], tier[j]] = [tier[j], tier[i]];
-        }
-        pool.push(...tier);
+        const rested = tier.filter(
+          (player) => !recentlyPlayedIds.has(player.id),
+        );
+        const recentlyPlayed = tier.filter((player) =>
+          recentlyPlayedIds.has(player.id),
+        );
+
+        pool.push(...shufflePlayers(rested), ...shufflePlayers(recentlyPlayed));
       });
+
+    return pool;
+  };
+
+  const buildMatchesFromPlayers = (
+    sourcePlayers: Player[],
+    recentlyPlayedIds: Set<string> = new Set(),
+    blockedIds: Set<string> = new Set(),
+  ) => {
+    const availablePlayers = sourcePlayers.filter(
+      (player) => !blockedIds.has(player.id),
+    );
+    const pool = rankCandidates(availablePlayers, recentlyPlayedIds);
 
     const newMatches: Match[] = [];
     const used = new Set<string>();
@@ -137,7 +239,7 @@ export function HomePage() {
         .map((player) => player.id),
     );
     const playersAfterPromote = incrementPlayedCounts(players, used);
-    const preview = buildMatchesFromPlayers(playersAfterPromote);
+    const preview = buildMatchesFromPlayers(playersAfterPromote, used, used);
 
     setPlayers(playersAfterPromote);
     setMatches(promotedMatches);
@@ -154,9 +256,53 @@ export function HomePage() {
   };
 
   const finishMatch = (court: number) => {
+    pushUndo(`จบแมตช์ Court ${court}`);
     const updatedMatches: Match[] = matches.map((match) =>
       match.court === court ? { ...match, status: 'done' } : match,
     );
+
+    if (nextMatches.length > 0) {
+      const activeOtherIds = getActivePlayerIds(updatedMatches);
+      const nextIndex = nextMatches.findIndex((nextMatch) => {
+        return [...nextMatch.teamA, ...nextMatch.teamB].every(
+          (player) => !activeOtherIds.has(player.id),
+        );
+      });
+
+      if (nextIndex >= 0) {
+        const nextUp = nextMatches[nextIndex];
+        const nextUpIds = new Set(
+          [...nextUp.teamA, ...nextUp.teamB].map((player) => player.id),
+        );
+        const matchesAfterPull = updatedMatches.map((match) =>
+          match.court === court
+            ? {
+                ...nextUp,
+                court,
+                status: 'ready' as MatchStatus,
+              }
+            : match,
+        );
+        const playersAfterPull = incrementPlayedCounts(players, nextUpIds);
+        const activeAfterPullIds = getActivePlayerIds(matchesAfterPull);
+        const preview = buildMatchesFromPlayers(
+          playersAfterPull,
+          activeAfterPullIds,
+          activeAfterPullIds,
+        );
+
+        setPlayers(playersAfterPull);
+        setMatches(matchesAfterPull);
+        setNextMatches(preview.newMatches);
+        showSnackbar({
+          title: `Court ${court} จบแมตช์แล้ว`,
+          description: `ดึงคู่ถัดไปขึ้น Court ${court} แล้ว`,
+          variant: 'success',
+        });
+        return;
+      }
+    }
+
     setMatches(updatedMatches);
 
     const isRoundFinished = updatedMatches.every(
@@ -205,14 +351,20 @@ export function HomePage() {
       [...target.teamA, ...target.teamB].map((player) => player.id),
     );
 
-    setMatches((prev) => prev.filter((match) => match.court !== court));
+    const remainingMatches = matches.filter((match) => match.court !== court);
+    setMatches(remainingMatches);
     const updatedPlayers = players.map((player) =>
       playerIds.has(player.id)
         ? { ...player, matches: Math.max(0, player.matches - 1) }
         : player,
     );
     setPlayers(updatedPlayers);
-    const preview = buildMatchesFromPlayers(updatedPlayers);
+    const activeIds = getActivePlayerIds(remainingMatches);
+    const preview = buildMatchesFromPlayers(
+      updatedPlayers,
+      activeIds,
+      activeIds,
+    );
     setNextMatches(preview.newMatches);
     showSnackbar({
       title: `ยกเลิก Court ${court}`,
@@ -220,18 +372,6 @@ export function HomePage() {
       variant: 'info',
     });
   };
-
-  useEffect(() => {
-    if (!snackbar) return;
-
-    const timeoutId = globalThis.window.setTimeout(() => {
-      setSnackbar(null);
-    }, 3000);
-
-    return () => {
-      globalThis.window.clearTimeout(timeoutId);
-    };
-  }, [snackbar]);
 
   const addPlayers = (names: string[]) => {
     const incoming = names.map((name) => name.trim()).filter(Boolean);
@@ -254,19 +394,29 @@ export function HomePage() {
     });
 
     if (accepted.length > 0) {
-      setPlayers((prev) => [
-        ...prev,
-        ...accepted.map((name) => ({
-          id: crypto.randomUUID(),
-          name,
-          matches: 0,
-        })),
-      ]);
-      setNextMatches([]);
+      const acceptedPlayers = accepted.map((name) => ({
+        id: crypto.randomUUID(),
+        name,
+        matches: 0,
+      }));
+      const updatedPlayers = [...players, ...acceptedPlayers];
+
+      setPlayers(updatedPlayers);
+      if (matches.length > 0) {
+        const activeIds = getActivePlayerIds(matches);
+        const preview = buildMatchesFromPlayers(
+          updatedPlayers,
+          activeIds,
+          activeIds,
+        );
+        setNextMatches(preview.newMatches);
+      } else {
+        setNextMatches([]);
+      }
     }
 
     if (accepted.length > 0 && duplicates.length === 0) {
-      setSnackbar(null);
+      toast.dismiss();
       return;
     }
 
@@ -287,8 +437,115 @@ export function HomePage() {
   };
 
   const removePlayer = (id: string) => {
-    setPlayers((prev) => prev.filter((player) => player.id !== id));
-    setNextMatches([]);
+    const targetPlayer = players.find((player) => player.id === id);
+    if (!targetPlayer) return;
+
+    const activeMatch = matches.find(
+      (match) =>
+        match.status !== 'done' &&
+        [...match.teamA, ...match.teamB].some((player) => player.id === id),
+    );
+
+    if (activeMatch) {
+      setPendingSubstitute({
+        playerId: id,
+        playerName: targetPlayer.name,
+        court: activeMatch.court,
+      });
+      return;
+    }
+
+    const updatedPlayers = players.filter((player) => player.id !== id);
+    setPlayers(updatedPlayers);
+    if (matches.length > 0) {
+      const activeIds = getActivePlayerIds(matches);
+      const preview = buildMatchesFromPlayers(
+        updatedPlayers,
+        activeIds,
+        activeIds,
+      );
+      setNextMatches(preview.newMatches);
+    } else {
+      setNextMatches([]);
+    }
+
+    showSnackbar({
+      title: `ลบ ${targetPlayer.name} แล้ว`,
+      description: 'อัปเดตรายการผู้เล่นเรียบร้อย',
+      variant: 'info',
+    });
+  };
+
+  const confirmSubstituteAndRemove = () => {
+    if (!pendingSubstitute) return;
+
+    const target = pendingSubstitute;
+    const activeIds = new Set(
+      matches
+        .filter((match) => match.status !== 'done')
+        .flatMap((match) => [...match.teamA, ...match.teamB])
+        .map((player) => player.id),
+    );
+
+    const candidatePool = players.filter(
+      (player) => !activeIds.has(player.id) && player.id !== target.playerId,
+    );
+    if (candidatePool.length === 0) {
+      setPendingSubstitute(null);
+      showSnackbar({
+        title: 'ไม่มีคนพักให้แทน',
+        description: 'ต้องมีผู้เล่นที่ไม่ได้อยู่ในคอร์ดปัจจุบันอย่างน้อย 1 คน',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const recentIds = getRoundPlayerIds(matches);
+    const replacement = rankCandidates(candidatePool, recentIds)[0];
+    if (!replacement) {
+      setPendingSubstitute(null);
+      showSnackbar({
+        title: 'สุ่มคนแทนไม่สำเร็จ',
+        description: 'ลองอีกครั้ง',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const updatedMatches = matches.map((match) => ({
+      ...match,
+      teamA: match.teamA.map((player) =>
+        player.id === target.playerId ? replacement : player,
+      ),
+      teamB: match.teamB.map((player) =>
+        player.id === target.playerId ? replacement : player,
+      ),
+    }));
+
+    const updatedPlayers = players
+      .filter((player) => player.id !== target.playerId)
+      .map((player) =>
+        player.id === replacement.id
+          ? { ...player, matches: player.matches + 1 }
+          : player,
+      );
+
+    const preview = buildMatchesFromPlayers(
+      updatedPlayers,
+      getActivePlayerIds(updatedMatches),
+      getActivePlayerIds(updatedMatches),
+    );
+
+    setMatches(updatedMatches);
+    setPlayers(updatedPlayers);
+    setNextMatches(preview.newMatches);
+    setPendingSubstitute(null);
+
+    showSnackbar({
+      title: `แทนผู้เล่น Court ${target.court}`,
+      description: `${replacement.name} ลงแทน ${target.playerName} แล้ว`,
+      variant: 'success',
+    });
   };
 
   const generateMatches = () => {
@@ -324,7 +581,12 @@ export function HomePage() {
       players,
       currentRound.used,
     );
-    const preview = buildMatchesFromPlayers(playersAfterCurrent);
+    const activeAfterIds = getActivePlayerIds(currentRound.newMatches);
+    const preview = buildMatchesFromPlayers(
+      playersAfterCurrent,
+      activeAfterIds,
+      activeAfterIds,
+    );
 
     setPlayers(playersAfterCurrent);
     setMatches(currentRound.newMatches);
@@ -339,13 +601,14 @@ export function HomePage() {
       return;
     }
 
-    setSnackbar(null);
+    toast.dismiss();
   };
 
   const resetStats = () => {
-    setPlayers((prev) => prev.map((player) => ({ ...player, matches: 0 })));
+    setPlayers(players.map((player) => ({ ...player, matches: 0 })));
     setMatches([]);
     setNextMatches([]);
+    setUndoStack([]);
     showSnackbar({
       title: 'รีเซ็ตเรียบร้อย',
       description: 'ล้างสถิติและแมตช์ทั้งหมด',
@@ -357,7 +620,8 @@ export function HomePage() {
     setPlayers([]);
     setMatches([]);
     setNextMatches([]);
-    setSnackbar(null);
+    setUndoStack([]);
+    toast.dismiss();
   };
 
   // const openHowToUse = () => {
@@ -409,69 +673,82 @@ export function HomePage() {
   // }
   // };
 
-  const SNACKBAR_STYLES: Record<string, string> = {
-    success: 'border-primary/40 bg-secondary text-primary',
-    error: 'border-destructive/40 bg-destructive/10 text-destructive',
-    default: 'border-tertiary/40 bg-card text-tertiary',
-  };
-
   return (
-    <div className='min-h-dvh bg-gradient-surface pb-24'>
-      {snackbar && (
-        <div className='pointer-events-none fixed inset-x-0 top-4 z-50 flex justify-center px-4'>
-          <div
-            className={`max-w-md rounded-2xl border px-4 py-2 shadow-dark ${
-              SNACKBAR_STYLES[snackbar.variant || 'default']
-            }`}
-          >
-            <p className='font-display text-sm font-bold'>{snackbar.title}</p>
-            <p className='text-xs opacity-90'>{snackbar.description}</p>
+    <div className="min-h-dvh bg-gradient-surface pb-24">
+      {pendingSubstitute && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              ยืนยันเปลี่ยนตัวผู้เล่น
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {pendingSubstitute.playerName} กำลังอยู่ใน Court{' '}
+              {pendingSubstitute.court} และจะถูกลบออกจากรายชื่อ ถ้าดำเนินการต่อ
+              ระบบจะสุ่มผู้เล่นที่กำลังพักมาแทนทันที
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPendingSubstitute(null)}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmSubstituteAndRemove}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                ยืนยันและสุ่มแทน
+              </Button>
+            </div>
           </div>
         </div>
       )}
 
-      <header className='sticky top-0 z-30 border-b border-border/60 bg-background/90 backdrop-blur-lg'>
-        <div className='mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6'>
-          <div className='flex items-center gap-2.5'>
-            <div className='flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark'>
-              <Sparkles className='h-5 w-5 animate-shuttle text-primary' />
+      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/90 backdrop-blur-lg">
+        <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
+              <Sparkles className="h-5 w-5 animate-shuttle text-primary" />
             </div>
             <div>
-              <h1 className='font-display text-base font-extrabold leading-tight text-foreground'>
+              <h1 className="font-display text-base font-extrabold leading-tight text-foreground">
                 Badminton Matcher
               </h1>
-              <p className='font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground'>
+              <p className="font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                 Fair · Fast · Fun · {APP_VERSION}
               </p>
             </div>
           </div>
           {players.length > 0 && (
             <Button
-              type='button'
-              size='icon'
-              variant='ghost'
+              type="button"
+              size="icon"
+              variant="ghost"
               onClick={clearAll}
-              className='rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive'
-              aria-label='ล้างทั้งหมด'
+              className="rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              aria-label="ล้างทั้งหมด"
             >
-              <Trash2 className='h-4 w-4' />
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
       </header>
 
-      <main className='mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8'>
-        <section className='overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6'>
-          <div className='space-y-5'>
+      <main className="mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8">
+        <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <div className="space-y-5">
             <ModeSelector value={mode} onChange={setMode} />
             <CourtSelector value={courts} onChange={setCourts} />
-            <div className='flex items-center justify-between rounded-2xl bg-secondary p-3.5 text-xs'>
-              <span className='font-medium text-secondary-foreground/70'>
+            <div className="flex items-center justify-between rounded-2xl bg-secondary p-3.5 text-xs">
+              <span className="font-medium text-secondary-foreground/70">
                 ต้องการผู้เล่นต่อรอบ อย่างน้อย
               </span>
-              <span className='font-display text-base font-extrabold text-primary'>
+              <span className="font-display text-base font-extrabold text-primary">
                 {requiredPlayers}{' '}
-                <span className='text-xs font-semibold text-secondary-foreground/60'>
+                <span className="text-xs font-semibold text-secondary-foreground/60">
                   คน
                 </span>
               </span>
@@ -479,30 +756,30 @@ export function HomePage() {
           </div>
         </section>
 
-        <section className='rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6'>
+        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
           <PlayerList
             players={players}
             onAddMany={addPlayers}
             onRemove={removePlayer}
           />
           <Button
-            type='button'
+            type="button"
             onClick={generateMatches}
             disabled={players.length < playersPerMatch || matches.length > 0}
-            className='mt-4 h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90'
+            className="mt-4 h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
           >
             <Icon
-              icon='material-symbols-light:badminton-outline-rounded'
-              width='24'
-              height='24'
-              className='mr-2'
+              icon="material-symbols-light:badminton-outline-rounded"
+              width="24"
+              height="24"
+              className="mr-2"
             />
             เริ่มจับคู่
           </Button>
         </section>
 
         {matches.length > 0 && (
-          <section className='rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6'>
+          <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
             <MatchBoard
               matches={matches}
               mode={mode}
@@ -512,32 +789,35 @@ export function HomePage() {
               onFinish={finishMatch}
               onRematch={rematch}
               onCancel={cancelMatch}
+              onSubstitutePlayer={removePlayer}
+              canUndoLatest={undoStack.length > 0}
+              onUndoLatest={undoLatest}
             />
-            <div className='mt-4 flex items-center justify-between gap-3 rounded-2xl bg-muted p-3 text-xs'>
-              <span className='inline-flex flex-wrap items-center gap-1 font-medium text-muted-foreground'>
-                <span className='inline-flex items-center'>
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-muted p-3 text-xs">
+              <span className="inline-flex flex-wrap items-center gap-1 font-medium text-muted-foreground">
+                <span className="inline-flex items-center">
                   <span>กำลังเล่น</span>
-                  <span className='px-2 font-display font-extrabold text-foreground'>
+                  <span className="px-2 font-display font-extrabold text-foreground">
                     {stats.playing}
                   </span>
                 </span>
 
-                <span className='px-1'>·</span>
+                <span className="px-1">·</span>
 
-                <span className='inline-flex items-center'>
+                <span className="inline-flex items-center">
                   <span>พักอยู่</span>
-                  <span className='px-2 font-display font-extrabold text-foreground'>
+                  <span className="px-2 font-display font-extrabold text-foreground">
                     {stats.resting}
                   </span>
                 </span>
               </span>
               <Button
-                type='button'
-                variant='link'
+                type="button"
+                variant="link"
                 onClick={resetStats}
-                className='h-auto p-0 font-display font-bold text-tertiary'
+                className="h-auto p-0 font-display font-bold text-tertiary"
               >
-                <RefreshCw className='h-3 w-3' />
+                <RefreshCw className="h-3 w-3" />
                 รีเซ็ตแมตท์ทั้งหมด
               </Button>
             </div>
@@ -545,9 +825,9 @@ export function HomePage() {
         )}
       </main>
 
-      <footer className='fixed inset-x-0 bottom-0 z-20 border-t border-border/50 bg-background/80 backdrop-blur-xl'>
-        <div className='mx-auto w-full max-w-md px-4 py-3 pb-4'>
-          <div className='flex flex-col items-center gap-3'>
+      <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-border/50 bg-background/80 backdrop-blur-xl">
+        <div className="mx-auto w-full max-w-md px-4 py-3 pb-4">
+          <div className="flex flex-col items-center gap-3">
             {/* Actions */}
             {/* <div className='flex flex-wrap items-center justify-center gap-2 rounded-full bg-muted/40 p-1 backdrop-blur'>
               <Button
@@ -582,9 +862,9 @@ export function HomePage() {
             </div> */}
 
             {/* Branding */}
-            <p className='text-xs font-medium text-muted-foreground'>
+            <p className="text-xs font-medium text-muted-foreground">
               <span>Powered by</span>
-              <span className='ml-1 font-display font-bold text-foreground'>
+              <span className="ml-1 font-display font-bold text-foreground">
                 wonder-toolbox
               </span>
             </p>

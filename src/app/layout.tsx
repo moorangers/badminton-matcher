@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Noto_Sans_Thai } from 'next/font/google';
 import type { ReactNode } from 'react';
 
+import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 
 const notoSansThai = Noto_Sans_Thai({
@@ -18,8 +19,11 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang='th'>
-      <body className={`${notoSansThai.variable} font-sans`}>{children}</body>
+    <html lang="th">
+      <body className={`${notoSansThai.variable} font-sans`}>
+        {children}
+        <Toaster />
+      </body>
     </html>
   );
 }
