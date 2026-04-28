@@ -8,7 +8,6 @@ import {
   // Coffee,
   RefreshCw,
   // Share2,
-  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -61,7 +60,7 @@ export function HomePage() {
   const undoLast = () => {
     setUndoStack((prev) => {
       if (prev.length === 0) return prev;
-      const snapshot = prev[prev.length - 1];
+      const snapshot = prev.at(-1)!;
       setPlayers(snapshot.players);
       setMatches(snapshot.matches);
       setNextMatches(snapshot.nextMatches);
@@ -70,7 +69,7 @@ export function HomePage() {
   };
 
   const undoLatest = () => {
-    const label = undoStack[undoStack.length - 1]?.label;
+    const label = undoStack.at(-1)?.label;
     undoLast();
     toast.success('ย้อนกลับแล้ว', {
       description: label ? `ยกเลิก: ${label}` : undefined,
@@ -711,7 +710,12 @@ export function HomePage() {
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
-              <Sparkles className="h-5 w-5 animate-shuttle text-primary" />
+              <Icon
+                icon="mdi:badminton"
+                width="20"
+                height="20"
+                className="animate-shuttle text-primary"
+              />
             </div>
             <div>
               <h1 className="font-display text-base font-extrabold leading-tight text-foreground">
