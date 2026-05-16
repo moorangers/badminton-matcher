@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalStorage } from '@/lib/useLocalStorage';
 import { Icon } from '@iconify/react';
 import {
@@ -21,13 +21,18 @@ import {
 import { ModeSelector, type Mode } from '@/components/ModeSelector';
 import { PlayerList, type Player } from '@/components/PlayerList';
 import { Button } from '@/components/ui/button';
-
-const APP_VERSION = 'v0.2.0';
+import { Input } from '@/components/ui/input';
+import { APP_VERSION } from '@/lib/appVersion';
 
 type PendingSubstitute = {
   playerId: string;
   playerName: string;
   court: number;
+};
+
+type ManagePlayerDraft = {
+  playerId: string;
+  name: string;
 };
 
 export function HomePage() {
@@ -39,21 +44,35 @@ export function HomePage() {
     'bm_nextMatches',
     [],
   );
+  const [totalFinishedMatches, setTotalFinishedMatches] =
+    useLocalStorage<number>('bm_totalFinishedMatches', 0);
+  const [managePlayerDraft, setManagePlayerDraft] =
+    useState<ManagePlayerDraft | null>(null);
   const [pendingSubstitute, setPendingSubstitute] =
     useState<PendingSubstitute | null>(null);
+  const manageNameInputRef = useRef<HTMLInputElement>(null);
 
   type UndoSnapshot = {
     players: Player[];
     matches: Match[];
     nextMatches: Match[];
+    totalFinishedMatches: number;
     label: string;
   };
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
 
+  useEffect(() => {
+    if (!managePlayerDraft) return;
+    const input = manageNameInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [managePlayerDraft]);
+
   const pushUndo = (label: string) => {
     setUndoStack((prev) => [
       ...prev.slice(-4),
-      { players, matches, nextMatches, label },
+      { players, matches, nextMatches, totalFinishedMatches, label },
     ]);
   };
 
@@ -64,6 +83,7 @@ export function HomePage() {
       setPlayers(snapshot.players);
       setMatches(snapshot.matches);
       setNextMatches(snapshot.nextMatches);
+      setTotalFinishedMatches(snapshot.totalFinishedMatches);
       return prev.slice(0, -1);
     });
   };
@@ -225,22 +245,21 @@ export function HomePage() {
     );
   };
 
-  const promoteNextRound = () => {
+  const promoteNextRound = (sourcePlayers: Player[]) => {
     if (nextMatches.length === 0) return false;
 
-    const promotedMatches = nextMatches.map((match) => ({
+    const promotedMatches: Match[] = nextMatches.map((match) => ({
       ...match,
-      status: 'ready' as MatchStatus,
+      status: 'ready',
     }));
     const used = new Set(
       promotedMatches
         .flatMap((match) => [...match.teamA, ...match.teamB])
         .map((player) => player.id),
     );
-    const playersAfterPromote = incrementPlayedCounts(players, used);
-    const preview = buildMatchesFromPlayers(playersAfterPromote, used, used);
+    const preview = buildMatchesFromPlayers(sourcePlayers, used, used);
 
-    setPlayers(playersAfterPromote);
+    setPlayers(sourcePlayers);
     setMatches(promotedMatches);
     setNextMatches(preview.newMatches);
     return true;
@@ -256,6 +275,20 @@ export function HomePage() {
 
   const finishMatch = (court: number) => {
     pushUndo(`จบแมตช์ Court ${court}`);
+    const finishedMatch = matches.find((match) => match.court === court);
+    if (!finishedMatch) return;
+    setTotalFinishedMatches((prev) => prev + 1);
+
+    const finishedPlayerIds = new Set(
+      [...finishedMatch.teamA, ...finishedMatch.teamB].map(
+        (player) => player.id,
+      ),
+    );
+    const playersAfterFinish = incrementPlayedCounts(
+      players,
+      finishedPlayerIds,
+    );
+
     const updatedMatches: Match[] = matches.map((match) =>
       match.court === court ? { ...match, status: 'done' } : match,
     );
@@ -270,27 +303,23 @@ export function HomePage() {
 
       if (nextIndex >= 0) {
         const nextUp = nextMatches[nextIndex];
-        const nextUpIds = new Set(
-          [...nextUp.teamA, ...nextUp.teamB].map((player) => player.id),
-        );
-        const matchesAfterPull = updatedMatches.map((match) =>
+        const matchesAfterPull: Match[] = updatedMatches.map((match) =>
           match.court === court
             ? {
                 ...nextUp,
                 court,
-                status: 'ready' as MatchStatus,
+                status: 'ready',
               }
             : match,
         );
-        const playersAfterPull = incrementPlayedCounts(players, nextUpIds);
         const activeAfterPullIds = getActivePlayerIds(matchesAfterPull);
         const preview = buildMatchesFromPlayers(
-          playersAfterPull,
+          playersAfterFinish,
           activeAfterPullIds,
           activeAfterPullIds,
         );
 
-        setPlayers(playersAfterPull);
+        setPlayers(playersAfterFinish);
         setMatches(matchesAfterPull);
         setNextMatches(preview.newMatches);
         showSnackbar({
@@ -302,13 +331,14 @@ export function HomePage() {
       }
     }
 
+    setPlayers(playersAfterFinish);
     setMatches(updatedMatches);
 
     const isRoundFinished = updatedMatches.every(
       (match) => match.status === 'done',
     );
     if (isRoundFinished && nextMatches.length > 0) {
-      promoteNextRound();
+      promoteNextRound(playersAfterFinish);
       showSnackbar({
         title: 'เริ่มรอบถัดไปอัตโนมัติ',
         description: 'ดึงแมตช์ถัดไปขึ้นมาเป็นแมตช์ปัจจุบันแล้ว',
@@ -346,24 +376,10 @@ export function HomePage() {
     const target = matches.find((match) => match.court === court);
     if (!target) return;
 
-    const playerIds = new Set(
-      [...target.teamA, ...target.teamB].map((player) => player.id),
-    );
-
     const remainingMatches = matches.filter((match) => match.court !== court);
     setMatches(remainingMatches);
-    const updatedPlayers = players.map((player) =>
-      playerIds.has(player.id)
-        ? { ...player, matches: Math.max(0, player.matches - 1) }
-        : player,
-    );
-    setPlayers(updatedPlayers);
     const activeIds = getActivePlayerIds(remainingMatches);
-    const preview = buildMatchesFromPlayers(
-      updatedPlayers,
-      activeIds,
-      activeIds,
-    );
+    const preview = buildMatchesFromPlayers(players, activeIds, activeIds);
     setNextMatches(preview.newMatches);
     showSnackbar({
       title: `ยกเลิก Court ${court}`,
@@ -437,7 +453,7 @@ export function HomePage() {
 
   const removePlayer = (id: string) => {
     const targetPlayer = players.find((player) => player.id === id);
-    if (!targetPlayer) return;
+    if (!targetPlayer) return false;
 
     const activeMatch = matches.find(
       (match) =>
@@ -446,12 +462,12 @@ export function HomePage() {
     );
 
     if (activeMatch) {
-      setPendingSubstitute({
-        playerId: id,
-        playerName: targetPlayer.name,
-        court: activeMatch.court,
+      showSnackbar({
+        title: 'ยังลบผู้เล่นไม่ได้',
+        description: `${targetPlayer.name} กำลังอยู่ใน Court ${activeMatch.court} ให้เปลี่ยนตัวก่อน`,
+        variant: 'error',
       });
-      return;
+      return false;
     }
 
     const updatedPlayers = players.filter((player) => player.id !== id);
@@ -473,9 +489,143 @@ export function HomePage() {
       description: 'อัปเดตรายการผู้เล่นเรียบร้อย',
       variant: 'info',
     });
+
+    return true;
   };
 
-  const confirmSubstituteAndRemove = () => {
+  const renamePlayerInMatches = (
+    sourceMatches: Match[],
+    playerId: string,
+    nextName: string,
+  ): Match[] => {
+    return sourceMatches.map((match) => ({
+      ...match,
+      teamA: match.teamA.map((player) =>
+        player.id === playerId ? { ...player, name: nextName } : player,
+      ),
+      teamB: match.teamB.map((player) =>
+        player.id === playerId ? { ...player, name: nextName } : player,
+      ),
+    }));
+  };
+
+  const openManagePlayer = (id: string) => {
+    const targetPlayer = players.find((player) => player.id === id);
+    if (!targetPlayer) return;
+
+    setManagePlayerDraft({
+      playerId: id,
+      name: targetPlayer.name,
+    });
+  };
+
+  const closeManagePlayer = () => {
+    setManagePlayerDraft(null);
+  };
+
+  const saveManagedPlayerName = () => {
+    if (!managePlayerDraft) return;
+
+    const trimmedName = managePlayerDraft.name.trim();
+    const targetPlayer = players.find(
+      (player) => player.id === managePlayerDraft.playerId,
+    );
+    if (!targetPlayer) {
+      closeManagePlayer();
+      return;
+    }
+
+    if (!trimmedName) {
+      showSnackbar({
+        title: 'ชื่อไม่ถูกต้อง',
+        description: 'กรุณากรอกชื่อผู้เล่น',
+        variant: 'error',
+      });
+      return;
+    }
+
+    if (trimmedName === targetPlayer.name) {
+      closeManagePlayer();
+      return;
+    }
+
+    const isDuplicate = players.some(
+      (player) =>
+        player.id !== targetPlayer.id &&
+        player.name.toLowerCase() === trimmedName.toLowerCase(),
+    );
+    if (isDuplicate) {
+      showSnackbar({
+        title: 'ชื่อซ้ำ',
+        description: `มีผู้เล่นชื่อ "${trimmedName}" อยู่แล้ว`,
+        variant: 'error',
+      });
+      return;
+    }
+
+    setPlayers((prev) =>
+      prev.map((player) =>
+        player.id === targetPlayer.id
+          ? { ...player, name: trimmedName }
+          : player,
+      ),
+    );
+    setMatches((prev) =>
+      renamePlayerInMatches(prev, targetPlayer.id, trimmedName),
+    );
+    setNextMatches((prev) =>
+      renamePlayerInMatches(prev, targetPlayer.id, trimmedName),
+    );
+    setPendingSubstitute((prev) =>
+      prev?.playerId === targetPlayer.id
+        ? { ...prev, playerName: trimmedName }
+        : prev,
+    );
+
+    closeManagePlayer();
+    showSnackbar({
+      title: 'แก้ชื่อเรียบร้อย',
+      description: `${targetPlayer.name} → ${trimmedName}`,
+      variant: 'success',
+    });
+  };
+
+  const deleteManagedPlayer = () => {
+    if (!managePlayerDraft) return;
+
+    const didRemove = removePlayer(managePlayerDraft.playerId);
+    if (didRemove) {
+      closeManagePlayer();
+    }
+  };
+
+  const requestSubstitutePlayer = (id: string) => {
+    const targetPlayer = players.find((player) => player.id === id);
+    if (!targetPlayer) return;
+
+    const activeMatch = matches.find(
+      (match) =>
+        match.status !== 'done' &&
+        [...match.teamA, ...match.teamB].some((player) => player.id === id),
+    );
+
+    if (!activeMatch) {
+      showSnackbar({
+        title: 'เปลี่ยนตัวไม่สำเร็จ',
+        description: `${targetPlayer.name} ไม่ได้อยู่ในแมตช์ปัจจุบัน`,
+        variant: 'error',
+      });
+      return;
+    }
+
+    setPendingSubstitute({
+      playerId: id,
+      playerName: targetPlayer.name,
+      court: activeMatch.court,
+    });
+  };
+
+  const confirmSubstitute = () => {
     if (!pendingSubstitute) return;
 
     const target = pendingSubstitute;
@@ -521,28 +671,20 @@ export function HomePage() {
       ),
     }));
 
-    const updatedPlayers = players
-      .filter((player) => player.id !== target.playerId)
-      .map((player) =>
-        player.id === replacement.id
-          ? { ...player, matches: player.matches + 1 }
-          : player,
-      );
-
     const preview = buildMatchesFromPlayers(
-      updatedPlayers,
+      players,
       getActivePlayerIds(updatedMatches),
       getActivePlayerIds(updatedMatches),
     );
 
     setMatches(updatedMatches);
-    setPlayers(updatedPlayers);
+    setPlayers(players);
     setNextMatches(preview.newMatches);
     setPendingSubstitute(null);
 
     showSnackbar({
       title: `แทนผู้เล่น Court ${target.court}`,
-      description: `${replacement.name} ลงแทน ${target.playerName} แล้ว`,
+      description: `${replacement.name} ลงแทน ${target.playerName} แล้ว (${target.playerName} ไปพัก)`,
       variant: 'success',
     });
   };
@@ -576,18 +718,14 @@ export function HomePage() {
       return;
     }
 
-    const playersAfterCurrent = incrementPlayedCounts(
-      players,
-      currentRound.used,
-    );
     const activeAfterIds = getActivePlayerIds(currentRound.newMatches);
     const preview = buildMatchesFromPlayers(
-      playersAfterCurrent,
+      players,
       activeAfterIds,
       activeAfterIds,
     );
 
-    setPlayers(playersAfterCurrent);
+    setPlayers(players);
     setMatches(currentRound.newMatches);
     setNextMatches(preview.newMatches);
 
@@ -607,6 +745,7 @@ export function HomePage() {
     setPlayers(players.map((player) => ({ ...player, matches: 0 })));
     setMatches([]);
     setNextMatches([]);
+    setTotalFinishedMatches(0);
     setUndoStack([]);
     showSnackbar({
       title: 'รีเซ็ตเรียบร้อย',
@@ -619,9 +758,23 @@ export function HomePage() {
     setPlayers([]);
     setMatches([]);
     setNextMatches([]);
+    setTotalFinishedMatches(0);
     setUndoStack([]);
     toast.dismiss();
   };
+
+  const managedPlayer = managePlayerDraft
+    ? players.find((player) => player.id === managePlayerDraft.playerId)
+    : null;
+  const managedPlayerActiveMatch = managedPlayer
+    ? matches.find(
+        (match) =>
+          match.status !== 'done' &&
+          [...match.teamA, ...match.teamB].some(
+            (player) => player.id === managedPlayer.id,
+          ),
+      )
+    : null;
 
   // const openHowToUse = () => {
   //   showSnackbar({
@@ -674,6 +827,85 @@ export function HomePage() {
 
   return (
     <div className="min-h-dvh bg-gradient-surface pb-24">
+      {managePlayerDraft && managedPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              จัดการผู้เล่น
+            </h3>
+
+            <div className="mt-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                แก้ไขชื่อ
+              </p>
+              <Input
+                ref={manageNameInputRef}
+                value={managePlayerDraft.name}
+                onChange={(event) =>
+                  setManagePlayerDraft((prev) =>
+                    prev ? { ...prev, name: event.target.value } : prev,
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveManagedPlayerName();
+                    return;
+                  }
+
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeManagePlayer();
+                  }
+                }}
+                className="h-11 rounded-xl"
+              />
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={closeManagePlayer}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={saveManagedPlayerName}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                บันทึกชื่อ
+              </Button>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-border bg-muted/40 p-3">
+              {managedPlayerActiveMatch ? (
+                <p className="text-xs font-medium text-muted-foreground">
+                  {managedPlayer.name} กำลังอยู่ใน Court{' '}
+                  {managedPlayerActiveMatch.court} ต้องเปลี่ยนตัวก่อนจึงจะลบได้
+                </p>
+              ) : (
+                <p className="text-xs font-medium text-muted-foreground">
+                  ลบผู้เล่นออกจากรายการถาวร
+                </p>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                onClick={deleteManagedPlayer}
+                disabled={Boolean(managedPlayerActiveMatch)}
+                className="mt-2 w-full rounded-xl border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                ลบผู้เล่น
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingSubstitute && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
@@ -682,8 +914,9 @@ export function HomePage() {
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
               {pendingSubstitute.playerName} กำลังอยู่ใน Court{' '}
-              {pendingSubstitute.court} และจะถูกลบออกจากรายชื่อ ถ้าดำเนินการต่อ
-              ระบบจะสุ่มผู้เล่นที่กำลังพักมาแทนทันที
+              {pendingSubstitute.court} ถ้าดำเนินการต่อ
+              ระบบจะสุ่มผู้เล่นที่กำลังพักมาเปลี่ยนแทนทันที
+              โดยผู้เล่นเดิมจะไปพัก
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <Button
@@ -696,7 +929,7 @@ export function HomePage() {
               </Button>
               <Button
                 type="button"
-                onClick={confirmSubstituteAndRemove}
+                onClick={confirmSubstitute}
                 className="rounded-xl bg-primary text-primary-foreground"
               >
                 ยืนยันและสุ่มแทน
@@ -764,7 +997,7 @@ export function HomePage() {
           <PlayerList
             players={players}
             onAddMany={addPlayers}
-            onRemove={removePlayer}
+            onManage={openManagePlayer}
           />
           <Button
             type="button"
@@ -793,7 +1026,7 @@ export function HomePage() {
               onFinish={finishMatch}
               onRematch={rematch}
               onCancel={cancelMatch}
-              onSubstitutePlayer={removePlayer}
+              onSubstitutePlayer={requestSubstitutePlayer}
               canUndoLatest={undoStack.length > 0}
               onUndoLatest={undoLatest}
             />
@@ -813,6 +1046,16 @@ export function HomePage() {
                   <span className="px-2 font-display font-extrabold text-foreground">
                     {stats.resting}
                   </span>
+                </span>
+
+                <span className="px-1">·</span>
+
+                <span className="inline-flex items-center">
+                  <span>เล่นแล้ว</span>
+                  <span className="px-2 font-display font-extrabold text-foreground">
+                    {totalFinishedMatches}
+                  </span>
+                  <span>แมตช์</span>
                 </span>
               </span>
               <Button
@@ -869,7 +1112,7 @@ export function HomePage() {
             <p className="text-xs font-medium text-muted-foreground">
               <span>Powered by</span>
               <span className="ml-1 font-display font-bold text-foreground">
-                wonder-toolbox
+                MiraLabs.Dev
               </span>
             </p>
           </div>
