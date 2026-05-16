@@ -1,7 +1,7 @@
 {
   "name": "badminton-matcher",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "packageManager": "yarn@1.22.22",
   "scripts": {
@@ -9,7 +9,8 @@
     "build": "next build",
     "compile": "yarn build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "version:sync": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "@iconify-json/material-symbols-light": "^1.2.68",
