@@ -6,8 +6,8 @@ import {
   Pause,
   Play,
   RotateCcw,
+  SlidersHorizontal,
   Swords,
-  // XCircle,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ export type MatchStatus = 'ready' | 'playing' | 'done';
 
 export interface Match {
   court: number;
+  mode: Mode;
   teamA: Player[];
   teamB: Player[];
   status: MatchStatus;
@@ -34,11 +35,12 @@ interface MatchBoardProps {
   showActions?: boolean;
   onStatusChange?: (court: number, status: MatchStatus) => void;
   onFinish?: (court: number) => void;
-  onRematch?: (court: number) => void;
-  onCancel?: (court: number) => void;
   onSubstitutePlayer?: (playerId: string) => void;
-  canUndoLatest?: boolean;
-  onUndoLatest?: () => void;
+  undoableCourtId?: number;
+  onUndoCourtFinish?: (court: number) => void;
+  canUndoPlanLatest?: boolean;
+  onUndoPlanLatest?: () => void;
+  onOpenPlanEditor?: () => void;
 }
 
 const statusConfig: Record<
@@ -74,26 +76,56 @@ export const MatchBoard = ({
   showActions = true,
   onStatusChange,
   onFinish,
-  onRematch,
-  onCancel,
   onSubstitutePlayer,
-  canUndoLatest = false,
-  onUndoLatest,
+  undoableCourtId,
+  onUndoCourtFinish,
+  canUndoPlanLatest = false,
+  onUndoPlanLatest,
+  onOpenPlanEditor,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="font-display text-base font-extrabold text-foreground">
           {title}
         </h3>
+        {showActions && (
+          <div className="flex items-center gap-2">
+            {canUndoPlanLatest && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onUndoPlanLatest?.()}
+                className="h-8 rounded-full px-3 font-display text-xs font-bold"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                ย้อนแผนล่าสุด
+              </Button>
+            )}
+            {onOpenPlanEditor && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onOpenPlanEditor}
+                className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                ปรับรอบถัดไป
+              </Button>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="space-y-3">
         {matches.map((m) => {
           const cfg = statusConfig[m.status];
           const StatusIcon = cfg.icon;
+          const matchMode = m.mode ?? mode;
           let statusClassName = 'border-border shadow-soft opacity-80';
 
           if (m.status === 'playing') {
@@ -116,7 +148,7 @@ export const MatchBoard = ({
                     Court {m.court}
                   </span>
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary-foreground/60">
-                    · {mode === 'singles' ? '1v1' : '2v2'}
+                    · {matchMode === 'singles' ? '1v1' : '2v2'}
                   </span>
                 </div>
                 <span
@@ -192,44 +224,20 @@ export const MatchBoard = ({
                         จบแมตช์
                       </Button>
                     </div>
-                    <div className="flex shrink-0 justify-end">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onUndoLatest?.()}
-                        disabled={!canUndoLatest}
-                        className={cn(
-                          'h-8 w-auto rounded-full px-2.5 font-display text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:bg-muted/60 hover:text-foreground',
-                          canUndoLatest
-                            ? 'opacity-85'
-                            : 'pointer-events-none opacity-0 sm:translate-y-1',
-                        )}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        ย้อนกลับล่าสุด
-                      </Button>
-                    </div>
-                    {/* <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() => onRematch?.(m.court)}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold'
-                    >
-                      <RotateCcw className='h-3.5 w-3.5' />
-                      รีแมตช์
-                    </Button> */}
-                    {/* <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() => onCancel?.(m.court)}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold text-destructive hover:bg-destructive/10 hover:text-destructive'
-                    >
-                      <XCircle className='h-3.5 w-3.5' />
-                      ยกเลิกคอร์ด
-                    </Button> */}
+                    {undoableCourtId === m.court && (
+                      <div className="ml-auto flex shrink-0 justify-end">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onUndoCourtFinish?.(m.court)}
+                          className="h-8 rounded-full px-3 font-display text-xs font-bold"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          ย้อนกลับคอร์ดนี้
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-xs font-medium text-muted-foreground">
@@ -243,13 +251,14 @@ export const MatchBoard = ({
       </div>
 
       {showActions && nextMatches.length > 0 && (
-        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+        <div className="rounded-2xl border border-border bg-muted/40 p-4">
           <div className="space-y-2">
             {nextMatches.map((match) => (
               <div key={`next-${match.court}`} className="text-xs">
                 <p className="flex items-center gap-2 font-medium text-foreground">
                   <span className="shrink-0 font-display font-bold text-muted-foreground">
-                    คู่ถัดไป (Court {match.court})
+                    คู่ถัดไป (Court {match.court} ·{' '}
+                    {(match.mode ?? mode) === 'singles' ? '1v1' : '2v2'})
                   </span>
 
                   <span className="min-w-0 truncate rounded-full border border-tertiary/30 bg-tertiary/10 px-3 py-1 text-tertiary shadow-sm">
@@ -269,7 +278,7 @@ export const MatchBoard = ({
       )}
 
       {showActions && restingPlayers.length > 0 && (
-        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+        <div className="rounded-2xl border border-border bg-muted/40 p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="flex h-6 w-6 items-center justify-center rounded-md bg-secondary/10 text-secondary">

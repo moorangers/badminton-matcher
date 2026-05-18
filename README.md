@@ -4,9 +4,22 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.3.0
+> Current Version: v0.4.0
 
-## Changelog
+## การอัปเดตเวอร์ชัน (Versioning Workflow)
+
+1. **เมื่อไหร่ควรอัปเวอร์ชัน?**
+
+- ทุกครั้งที่มีการเพิ่มฟีเจอร์ใหม่, ปรับ UI/UX สำคัญ, หรือแก้ไขบั๊กที่กระทบผู้ใช้
+- ก่อนจะ merge หรือปล่อย production ทุกครั้ง
+
+2. **ขั้นตอนการอัปเดตเวอร์ชัน**
+
+- ใช้ `yarn version --patch` หรือ `yarn version --minor` เพื่อแก้ไขเลขเวอร์ชันใน `package.json`
+- เพิ่ม/แก้ไขรายละเอียดใน `CHANGELOG.md` (เพิ่มหัวข้อเวอร์ชันใหม่และสรุปสิ่งที่เปลี่ยนแปลง)
+- รันคำสั่ง `yarn version:sync` เพื่อ sync เวอร์ชันไปที่ README.md และหัวข้อ changelog อัตโนมัติ
+- Commit และ push code ตามปกติ
+
 ดูรายละเอียดการเปลี่ยนแปลงทั้งหมดที่ CHANGELOG.md
 
 ## Features

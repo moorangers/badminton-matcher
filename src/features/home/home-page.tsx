@@ -3,13 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalStorage } from '@/lib/useLocalStorage';
 import { Icon } from '@iconify/react';
-import {
-  // BookOpenText,
-  // Coffee,
-  RefreshCw,
-  // Share2,
-  Trash2,
-} from 'lucide-react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { CourtSelector } from '@/components/CourtSelector';
@@ -23,6 +17,7 @@ import { PlayerList, type Player } from '@/components/PlayerList';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
+import { cn } from '@/lib/utils';
 
 type PendingSubstitute = {
   playerId: string;
@@ -35,70 +30,139 @@ type ManagePlayerDraft = {
   name: string;
 };
 
+type SessionPlan = {
+  mode: Mode;
+  courtIds: number[];
+};
+
+const MAX_COURTS = 3;
+
+const getCourtIds = (count: number) => {
+  return Array.from({ length: count }, (_, index) => index + 1);
+};
+
+const normalizeCourtIds = (courtIds: number[], fallbackCount: number) => {
+  const normalized = Array.from(
+    new Set(
+      courtIds.filter((courtId) => courtId >= 1 && courtId <= MAX_COURTS),
+    ),
+  ).sort((a, b) => a - b);
+
+  return normalized.length > 0
+    ? normalized
+    : getCourtIds(Math.min(Math.max(fallbackCount, 1), MAX_COURTS));
+};
+
+const getPlayersPerMatch = (sourceMode: Mode) => {
+  return sourceMode === 'singles' ? 2 : 4;
+};
+
+const formatModeLabel = (sourceMode: Mode) => {
+  return sourceMode === 'singles' ? 'Singles (1v1)' : 'Doubles (2v2)';
+};
+
+const formatCourtLabel = (courtIds: number[]) => {
+  return courtIds.map((courtId) => `Court ${courtId}`).join(', ');
+};
+
 export function HomePage() {
-  const [mode, setMode] = useLocalStorage<Mode>('bm_mode', 'doubles');
-  const [courts, setCourts] = useLocalStorage<number>('bm_courts', 1);
-  const [players, setPlayers] = useLocalStorage<Player[]>('bm_players', []);
-  const [matches, setMatches] = useLocalStorage<Match[]>('bm_matches', []);
-  const [nextMatches, setNextMatches] = useLocalStorage<Match[]>(
-    'bm_nextMatches',
+  const [mode, setMode, removeMode] = useLocalStorage<Mode>(
+    'bm_mode',
+    'doubles',
+  );
+  const [courts, setCourts, removeCourts] = useLocalStorage<number>(
+    'bm_courts',
+    1,
+  );
+  const [players, setPlayers, removePlayers] = useLocalStorage<Player[]>(
+    'bm_players',
     [],
   );
-  const [totalFinishedMatches, setTotalFinishedMatches] =
-    useLocalStorage<number>('bm_totalFinishedMatches', 0);
+  const [matches, setMatches, removeMatches] = useLocalStorage<Match[]>(
+    'bm_matches',
+    [],
+  );
+  const [nextMatches, setNextMatches, removeNextMatches] = useLocalStorage<
+    Match[]
+  >('bm_nextMatches', []);
+  const [activeCourtIds, setActiveCourtIds, removeActiveCourtIds] =
+    useLocalStorage<number[]>('bm_activeCourtIds', []);
+  const [nextPlan, setNextPlan, removeNextPlan] =
+    useLocalStorage<SessionPlan | null>('bm_nextPlan', null);
+  const [
+    totalFinishedMatches,
+    setTotalFinishedMatches,
+    removeTotalFinishedMatches,
+  ] = useLocalStorage<number>('bm_totalFinishedMatches', 0);
   const [managePlayerDraft, setManagePlayerDraft] =
     useState<ManagePlayerDraft | null>(null);
   const [pendingSubstitute, setPendingSubstitute] =
     useState<PendingSubstitute | null>(null);
+  const [planDraft, setPlanDraft] = useState<SessionPlan | null>(null);
+  const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
 
   type UndoSnapshot = {
+    actionType: 'finish' | 'plan';
+    courtId?: number;
+    mode: Mode;
+    courts: number;
     players: Player[];
     matches: Match[];
     nextMatches: Match[];
+    activeCourtIds: number[];
+    nextPlan: SessionPlan | null;
     totalFinishedMatches: number;
     label: string;
   };
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
 
-  useEffect(() => {
-    if (!managePlayerDraft) return;
-    const input = manageNameInputRef.current;
-    if (!input) return;
-    input.focus();
-    input.select();
-  }, [managePlayerDraft?.playerId]);
+  const sessionCourtIds = useMemo(() => {
+    if (matches.length === 0) {
+      return normalizeCourtIds(
+        activeCourtIds.length > 0 ? activeCourtIds : getCourtIds(courts),
+        courts,
+      );
+    }
 
-  const pushUndo = (label: string) => {
-    setUndoStack((prev) => [
-      ...prev.slice(-4),
-      { players, matches, nextMatches, totalFinishedMatches, label },
-    ]);
-  };
+    const courtIdsFromMatches = matches.map((match) => match.court);
+    const fallbackCourtIds =
+      courtIdsFromMatches.length > 0
+        ? courtIdsFromMatches
+        : getCourtIds(courts);
 
-  const undoLast = () => {
-    setUndoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const snapshot = prev.at(-1)!;
-      setPlayers(snapshot.players);
-      setMatches(snapshot.matches);
-      setNextMatches(snapshot.nextMatches);
-      setTotalFinishedMatches(snapshot.totalFinishedMatches);
-      return prev.slice(0, -1);
-    });
-  };
+    return normalizeCourtIds(
+      activeCourtIds.length > 0 ? activeCourtIds : fallbackCourtIds,
+      courts,
+    );
+  }, [activeCourtIds, courts, matches]);
 
-  const undoLatest = () => {
-    const label = undoStack.at(-1)?.label;
-    undoLast();
-    toast.success('ย้อนกลับแล้ว', {
-      description: label ? `ยกเลิก: ${label}` : undefined,
-      duration: 2500,
-    });
-  };
+  const currentPlan = useMemo<SessionPlan>(
+    () => ({
+      mode,
+      courtIds: sessionCourtIds,
+    }),
+    [mode, sessionCourtIds],
+  );
 
-  const playersPerMatch = mode === 'singles' ? 2 : 4;
-  const requiredPlayers = playersPerMatch * courts;
+  const playersPerMatch = getPlayersPerMatch(mode);
+
+  const activeMatches = useMemo(
+    () => matches.filter((match) => match.status !== 'done'),
+    [matches],
+  );
+  const currentSessionSummary = useMemo(() => {
+    if (activeMatches.length === 0) return undefined;
+
+    const courtIds = Array.from(
+      new Set(activeMatches.map((match) => match.court)),
+    ).sort((a, b) => a - b);
+    const modes = Array.from(new Set(activeMatches.map((match) => match.mode)));
+    const modeLabel =
+      modes.length === 1 ? formatModeLabel(modes[0]) : 'Mixed mode';
+
+    return `${formatCourtLabel(courtIds)} · ${modeLabel}`;
+  }, [activeMatches]);
 
   const stats = useMemo(() => {
     const activeMatchIds = new Set(
@@ -121,6 +185,87 @@ export function HomePage() {
       restingPlayers: resting,
     };
   }, [matches, players]);
+
+  useEffect(() => {
+    if (!managePlayerDraft) return;
+    const input = manageNameInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [managePlayerDraft?.playerId]);
+
+  const pushUndo = (
+    label: string,
+    actionType: 'finish' | 'plan',
+    courtId?: number,
+  ) => {
+    setUndoStack((prev) => [
+      ...prev.slice(-4),
+      {
+        actionType,
+        courtId,
+        mode,
+        courts,
+        players,
+        matches,
+        nextMatches,
+        activeCourtIds,
+        nextPlan,
+        totalFinishedMatches,
+        label,
+      },
+    ]);
+  };
+
+  const undoLast = () => {
+    setUndoStack((prev) => {
+      if (prev.length === 0) return prev;
+      const snapshot = prev.at(-1)!;
+      setMode(snapshot.mode);
+      setCourts(snapshot.courts);
+      setPlayers(snapshot.players);
+      setMatches(snapshot.matches);
+      setNextMatches(snapshot.nextMatches);
+      setActiveCourtIds(snapshot.activeCourtIds);
+      setNextPlan(snapshot.nextPlan);
+      setTotalFinishedMatches(snapshot.totalFinishedMatches);
+      return prev.slice(0, -1);
+    });
+  };
+
+  const latestUndo = undoStack.at(-1);
+  const undoableCourtId =
+    latestUndo?.actionType === 'finish' ? latestUndo.courtId : undefined;
+  const canUndoLatestPlan = latestUndo?.actionType === 'plan';
+
+  const undoLatestFinishByCourt = (court: number) => {
+    if (undoableCourtId !== court) {
+      showSnackbar({
+        title: 'ยังย้อนกลับคอร์ดนี้ไม่ได้',
+        description: 'ย้อนกลับได้เฉพาะคอร์ดที่กดจบล่าสุด',
+        variant: 'info',
+      });
+      return;
+    }
+
+    const label = latestUndo?.label;
+    undoLast();
+    toast.success('ย้อนกลับคอร์ดแล้ว', {
+      description: label ? `ยกเลิก: ${label}` : undefined,
+      duration: 2500,
+    });
+  };
+
+  const undoLatestPlan = () => {
+    if (!canUndoLatestPlan) return;
+
+    const label = latestUndo?.label;
+    undoLast();
+    toast.success('ย้อนกลับแผนแล้ว', {
+      description: label ? `ยกเลิก: ${label}` : undefined,
+      duration: 2500,
+    });
+  };
 
   const showSnackbar = ({
     title,
@@ -203,7 +348,10 @@ export function HomePage() {
     sourcePlayers: Player[],
     recentlyPlayedIds: Set<string> = new Set(),
     blockedIds: Set<string> = new Set(),
+    plan: SessionPlan = currentPlan,
   ) => {
+    const planCourtIds = normalizeCourtIds(plan.courtIds, courts);
+    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
     const availablePlayers = sourcePlayers.filter(
       (player) => !blockedIds.has(player.id),
     );
@@ -212,19 +360,20 @@ export function HomePage() {
     const newMatches: Match[] = [];
     const used = new Set<string>();
 
-    for (let courtIndex = 0; courtIndex < courts; courtIndex += 1) {
+    for (const courtId of planCourtIds) {
       const slice = pool
         .filter((player) => !used.has(player.id))
-        .slice(0, playersPerMatch);
-      if (slice.length < playersPerMatch) {
+        .slice(0, planPlayersPerMatch);
+      if (slice.length < planPlayersPerMatch) {
         break;
       }
 
       slice.forEach((player) => used.add(player.id));
 
-      const half = playersPerMatch / 2;
+      const half = planPlayersPerMatch / 2;
       newMatches.push({
-        court: courtIndex + 1,
+        court: courtId,
+        mode: plan.mode,
         teamA: slice.slice(0, half),
         teamB: slice.slice(half),
         status: 'ready',
@@ -245,24 +394,31 @@ export function HomePage() {
     );
   };
 
-  const promoteNextRound = (sourcePlayers: Player[]) => {
-    if (nextMatches.length === 0) return false;
+  const pruneClosedCourtMatches = (
+    sourceMatches: Match[],
+    plan: SessionPlan = currentPlan,
+  ) => {
+    const plannedCourtIds = new Set(plan.courtIds);
 
-    const promotedMatches: Match[] = nextMatches.map((match) => ({
-      ...match,
-      status: 'ready',
-    }));
-    const used = new Set(
-      promotedMatches
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
+    return sourceMatches.filter((match) => {
+      return match.status !== 'done' || plannedCourtIds.has(match.court);
+    });
+  };
+
+  const isPlanActiveForCurrentMatches = (
+    sourceMatches: Match[],
+    plan: SessionPlan,
+  ) => {
+    const plannedCourtIds = new Set(plan.courtIds);
+    const openMatches = sourceMatches.filter(
+      (match) => match.status !== 'done',
     );
-    const preview = buildMatchesFromPlayers(sourcePlayers, used, used);
 
-    setPlayers(sourcePlayers);
-    setMatches(promotedMatches);
-    setNextMatches(preview.newMatches);
-    return true;
+    if (openMatches.length === 0) return false;
+
+    return openMatches.every((match) => {
+      return plannedCourtIds.has(match.court) && match.mode === plan.mode;
+    });
   };
 
   const updateMatchStatus = (court: number, status: MatchStatus) => {
@@ -274,10 +430,19 @@ export function HomePage() {
   };
 
   const finishMatch = (court: number) => {
-    pushUndo(`จบแมตช์ Court ${court}`);
     const finishedMatch = matches.find((match) => match.court === court);
     if (!finishedMatch) return;
+
+    pushUndo(`จบแมตช์ Court ${court}`, 'finish', court);
     setTotalFinishedMatches((prev) => prev + 1);
+
+    const plan = currentPlan;
+    const plannedCourtIds = new Set(plan.courtIds);
+    const clearNextPlanIfApplied = (sourceMatches: Match[]) => {
+      if (nextPlan && isPlanActiveForCurrentMatches(sourceMatches, nextPlan)) {
+        setNextPlan(null);
+      }
+    };
 
     const finishedPlayerIds = new Set(
       [...finishedMatch.teamA, ...finishedMatch.teamB].map(
@@ -289,17 +454,25 @@ export function HomePage() {
       finishedPlayerIds,
     );
 
-    const updatedMatches: Match[] = matches.map((match) =>
+    const markedDoneMatches: Match[] = matches.map((match) =>
       match.court === court ? { ...match, status: 'done' } : match,
     );
+    const updatedMatches = pruneClosedCourtMatches(markedDoneMatches, plan);
 
-    if (nextMatches.length > 0) {
+    if (plannedCourtIds.has(court) && nextMatches.length > 0) {
       const activeOtherIds = getActivePlayerIds(updatedMatches);
-      const nextIndex = nextMatches.findIndex((nextMatch) => {
+      const canUseNextMatch = (nextMatch: Match) => {
         return [...nextMatch.teamA, ...nextMatch.teamB].every(
           (player) => !activeOtherIds.has(player.id),
         );
+      };
+      const sameCourtIndex = nextMatches.findIndex((nextMatch) => {
+        return nextMatch.court === court && canUseNextMatch(nextMatch);
       });
+      const nextIndex =
+        sameCourtIndex >= 0
+          ? sameCourtIndex
+          : nextMatches.findIndex(canUseNextMatch);
 
       if (nextIndex >= 0) {
         const nextUp = nextMatches[nextIndex];
@@ -308,6 +481,7 @@ export function HomePage() {
             ? {
                 ...nextUp,
                 court,
+                mode: nextUp.mode ?? plan.mode,
                 status: 'ready',
               }
             : match,
@@ -317,11 +491,13 @@ export function HomePage() {
           playersAfterFinish,
           activeAfterPullIds,
           activeAfterPullIds,
+          plan,
         );
 
         setPlayers(playersAfterFinish);
         setMatches(matchesAfterPull);
         setNextMatches(preview.newMatches);
+        clearNextPlanIfApplied(matchesAfterPull);
         showSnackbar({
           title: `Court ${court} จบแมตช์แล้ว`,
           description: `ดึงคู่ถัดไปขึ้น Court ${court} แล้ว`,
@@ -331,60 +507,90 @@ export function HomePage() {
       }
     }
 
-    setPlayers(playersAfterFinish);
-    setMatches(updatedMatches);
-
-    const isRoundFinished = updatedMatches.every(
-      (match) => match.status === 'done',
+    const activeAfterFinishIds = getActivePlayerIds(updatedMatches);
+    const preview = buildMatchesFromPlayers(
+      playersAfterFinish,
+      activeAfterFinishIds,
+      activeAfterFinishIds,
+      plan,
     );
-    if (isRoundFinished && nextMatches.length > 0) {
-      promoteNextRound(playersAfterFinish);
+    const sameCourtGeneratedIndex = preview.newMatches.findIndex(
+      (match) => match.court === court,
+    );
+    const canGenerateNextForCourt =
+      plannedCourtIds.has(court) && preview.newMatches.length > 0;
+    let generatedNextIndex = -1;
+    if (canGenerateNextForCourt) {
+      generatedNextIndex = Math.max(sameCourtGeneratedIndex, 0);
+    }
+
+    if (generatedNextIndex >= 0) {
+      const nextUp = preview.newMatches[generatedNextIndex];
+      const matchesAfterGeneratedPull: Match[] = updatedMatches.map((match) =>
+        match.court === court
+          ? {
+              ...nextUp,
+              court,
+              mode: nextUp.mode ?? plan.mode,
+              status: 'ready',
+            }
+          : match,
+      );
+      const activeAfterGeneratedPullIds = getActivePlayerIds(
+        matchesAfterGeneratedPull,
+      );
+      const nextPreview = buildMatchesFromPlayers(
+        playersAfterFinish,
+        activeAfterGeneratedPullIds,
+        activeAfterGeneratedPullIds,
+        plan,
+      );
+
+      setPlayers(playersAfterFinish);
+      setMatches(matchesAfterGeneratedPull);
+      setNextMatches(nextPreview.newMatches);
+      clearNextPlanIfApplied(matchesAfterGeneratedPull);
       showSnackbar({
-        title: 'เริ่มรอบถัดไปอัตโนมัติ',
-        description: 'ดึงแมตช์ถัดไปขึ้นมาเป็นแมตช์ปัจจุบันแล้ว',
+        title: `Court ${court} จบแมตช์แล้ว`,
+        description: `จัดคู่ใหม่ขึ้น Court ${court} ตามแผนรอบถัดไปแล้ว`,
         variant: 'success',
       });
       return;
     }
 
+    const hasActiveMatches = updatedMatches.some(
+      (match) => match.status !== 'done',
+    );
+
+    if (!hasActiveMatches && preview.newMatches.length > 0) {
+      const nextPreview = buildMatchesFromPlayers(
+        playersAfterFinish,
+        preview.used,
+        preview.used,
+        plan,
+      );
+
+      setPlayers(playersAfterFinish);
+      setMatches(preview.newMatches);
+      setNextMatches(nextPreview.newMatches);
+      clearNextPlanIfApplied(preview.newMatches);
+      showSnackbar({
+        title: 'เริ่มรอบถัดไปอัตโนมัติ',
+        description: 'จัดคู่ใหม่ตามแผนรอบถัดไปแล้ว',
+        variant: 'success',
+      });
+      return;
+    }
+
+    setPlayers(playersAfterFinish);
+    setMatches(updatedMatches);
+    setNextMatches(preview.newMatches);
+    clearNextPlanIfApplied(updatedMatches);
+
     showSnackbar({
       title: `Court ${court} จบแมตช์แล้ว`,
       description: 'อัปเดตสถานะเป็นจบแมตช์แล้ว',
       variant: 'success',
-    });
-  };
-
-  const rematch = (court: number) => {
-    setMatches((prev) =>
-      prev.map((match) =>
-        match.court === court
-          ? {
-              ...match,
-              status: 'ready',
-            }
-          : match,
-      ),
-    );
-    showSnackbar({
-      title: `รีแมตช์ Court ${court}`,
-      description: 'รีเซ็ตสถานะเรียบร้อย',
-      variant: 'info',
-    });
-  };
-
-  const cancelMatch = (court: number) => {
-    const target = matches.find((match) => match.court === court);
-    if (!target) return;
-
-    const remainingMatches = matches.filter((match) => match.court !== court);
-    setMatches(remainingMatches);
-    const activeIds = getActivePlayerIds(remainingMatches);
-    const preview = buildMatchesFromPlayers(players, activeIds, activeIds);
-    setNextMatches(preview.newMatches);
-    showSnackbar({
-      title: `ยกเลิก Court ${court}`,
-      description: 'นำคอร์ดนี้ออกจากรอบปัจจุบันแล้ว',
-      variant: 'info',
     });
   };
 
@@ -689,6 +895,103 @@ export function HomePage() {
     });
   };
 
+  const handleModeChange = (nextMode: Mode) => {
+    setMode(nextMode);
+    setNextPlan(null);
+  };
+
+  const handleCourtCountChange = (nextCourts: number) => {
+    const normalizedCourts = Math.min(Math.max(nextCourts, 1), MAX_COURTS);
+
+    setCourts(normalizedCourts);
+    setActiveCourtIds(getCourtIds(normalizedCourts));
+    setNextPlan(null);
+  };
+
+  const openPlanEditor = () => {
+    const basePlan = nextPlan ?? currentPlan;
+
+    setPlanDraft({
+      mode: basePlan.mode,
+      courtIds: [...basePlan.courtIds],
+    });
+  };
+
+  const closePlanEditor = () => {
+    setPlanDraft(null);
+  };
+
+  const setPlanDraftMode = (nextMode: Mode) => {
+    setPlanDraft((prev) => (prev ? { ...prev, mode: nextMode } : prev));
+  };
+
+  const togglePlanDraftCourt = (courtId: number) => {
+    setPlanDraft((prev) => {
+      if (!prev) return prev;
+
+      const nextCourtIds = prev.courtIds.includes(courtId)
+        ? prev.courtIds.filter((id) => id !== courtId)
+        : [...prev.courtIds, courtId];
+
+      return {
+        ...prev,
+        courtIds: nextCourtIds.toSorted((a, b) => a - b),
+      };
+    });
+  };
+
+  const saveNextPlan = () => {
+    if (!planDraft) return;
+
+    if (planDraft.courtIds.length === 0) {
+      showSnackbar({
+        title: 'ยังไม่ได้เลือกคอร์ด',
+        description: 'เลือกอย่างน้อย 1 คอร์ดสำหรับรอบถัดไป',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const plan: SessionPlan = {
+      mode: planDraft.mode,
+      courtIds: normalizeCourtIds(planDraft.courtIds, courts),
+    };
+    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
+    const planRequiredPlayers = planPlayersPerMatch * plan.courtIds.length;
+
+    if (players.length < planRequiredPlayers) {
+      showSnackbar({
+        title: 'ผู้เล่นไม่พอสำหรับแผนใหม่',
+        description: `ต้องมีอย่างน้อย ${planRequiredPlayers} คนสำหรับ ${formatCourtLabel(plan.courtIds)} · ${formatModeLabel(plan.mode)}`,
+        variant: 'error',
+      });
+      return;
+    }
+
+    pushUndo('เปลี่ยนแผนรอบถัดไป', 'plan');
+
+    const activeIds = getActivePlayerIds(matches);
+    const preview = buildMatchesFromPlayers(
+      players,
+      activeIds,
+      activeIds,
+      plan,
+    );
+
+    setMode(plan.mode);
+    setCourts(plan.courtIds.length);
+    setActiveCourtIds(plan.courtIds);
+    setNextPlan(plan);
+    setNextMatches(preview.newMatches);
+    setPlanDraft(null);
+
+    showSnackbar({
+      title: 'เปลี่ยนแผนรอบถัดไปแล้ว',
+      description: 'คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว',
+      variant: 'success',
+    });
+  };
+
   const generateMatches = () => {
     if (matches.length > 0) {
       showSnackbar({
@@ -708,7 +1011,19 @@ export function HomePage() {
       return;
     }
 
-    const currentRound = buildMatchesFromPlayers(players);
+    const startPlan: SessionPlan = {
+      mode,
+      courtIds: normalizeCourtIds(
+        activeCourtIds.length > 0 ? activeCourtIds : getCourtIds(courts),
+        courts,
+      ),
+    };
+    const currentRound = buildMatchesFromPlayers(
+      players,
+      new Set(),
+      new Set(),
+      startPlan,
+    );
     if (currentRound.newMatches.length === 0) {
       showSnackbar({
         title: 'จับคู่ไม่สำเร็จ',
@@ -723,15 +1038,18 @@ export function HomePage() {
       players,
       activeAfterIds,
       activeAfterIds,
+      startPlan,
     );
 
     setPlayers(players);
     setMatches(currentRound.newMatches);
     setNextMatches(preview.newMatches);
+    setActiveCourtIds(startPlan.courtIds);
+    setNextPlan(null);
 
-    if (currentRound.newMatches.length < courts) {
+    if (currentRound.newMatches.length < startPlan.courtIds.length) {
       showSnackbar({
-        title: `จับคู่ได้ ${currentRound.newMatches.length}/${courts} คอร์ด`,
+        title: `จับคู่ได้ ${currentRound.newMatches.length}/${startPlan.courtIds.length} คอร์ด`,
         description: 'เพิ่มผู้เล่นเพื่อใช้ทุกคอร์ด',
         variant: 'info',
       });
@@ -745,6 +1063,9 @@ export function HomePage() {
     setPlayers(players.map((player) => ({ ...player, matches: 0 })));
     setMatches([]);
     setNextMatches([]);
+    setActiveCourtIds(getCourtIds(courts));
+    setNextPlan(null);
+    setPlanDraft(null);
     setTotalFinishedMatches(0);
     setUndoStack([]);
     showSnackbar({
@@ -755,12 +1076,26 @@ export function HomePage() {
   };
 
   const clearAll = () => {
-    setPlayers([]);
-    setMatches([]);
-    setNextMatches([]);
-    setTotalFinishedMatches(0);
+    removeMode();
+    removeCourts();
+    removePlayers();
+    removeMatches();
+    removeNextMatches();
+    removeActiveCourtIds();
+    removeNextPlan();
+    removeTotalFinishedMatches();
+    setPlanDraft(null);
     setUndoStack([]);
     toast.dismiss();
+  };
+
+  const requestClearAll = () => {
+    setIsClearAllConfirmOpen(true);
+  };
+
+  const confirmClearAll = () => {
+    clearAll();
+    setIsClearAllConfirmOpen(false);
   };
 
   const managedPlayer = managePlayerDraft
@@ -883,8 +1218,7 @@ export function HomePage() {
             <div className="mt-4 rounded-xl border border-border bg-muted/40 p-3">
               {managedPlayerActiveMatch ? (
                 <p className="text-xs font-medium text-muted-foreground">
-                  {managedPlayer.name} กำลังอยู่ใน Court{' '}
-                  {managedPlayerActiveMatch.court} ต้องเปลี่ยนตัวก่อนจึงจะลบได้
+                  {`${managedPlayer.name} กำลังอยู่ใน Court ${managedPlayerActiveMatch.court} ต้องเปลี่ยนตัวก่อนจึงจะลบได้`}
                 </p>
               ) : (
                 <p className="text-xs font-medium text-muted-foreground">
@@ -913,10 +1247,7 @@ export function HomePage() {
               ยืนยันเปลี่ยนตัวผู้เล่น
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              {pendingSubstitute.playerName} กำลังอยู่ใน Court{' '}
-              {pendingSubstitute.court} ถ้าดำเนินการต่อ
-              ระบบจะสุ่มผู้เล่นที่กำลังพักมาเปลี่ยนแทนทันที
-              โดยผู้เล่นเดิมจะไปพัก
+              {`${pendingSubstitute.playerName} กำลังอยู่ใน Court ${pendingSubstitute.court} ถ้าดำเนินการต่อ ระบบจะสุ่มผู้เล่นที่กำลังพักมาเปลี่ยนแทนทันที โดยผู้เล่นเดิมจะไปพัก`}
             </p>
             <div className="mt-4 flex items-center justify-end gap-2">
               <Button
@@ -933,6 +1264,110 @@ export function HomePage() {
                 className="rounded-xl bg-primary text-primary-foreground"
               >
                 ยืนยันและสุ่มแทน
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {planDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              ปรับรอบถัดไป
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              เกมที่กำลังเล่นอยู่จะไม่เปลี่ยน ระบบจะใช้แผนนี้ตอนเติมคู่ถัดไป
+            </p>
+
+            <div className="mt-5 space-y-5">
+              <ModeSelector
+                value={planDraft.mode}
+                onChange={setPlanDraftMode}
+              />
+
+              <div className="space-y-2">
+                <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  เลือกคอร์ดที่จะใช้ต่อ
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {getCourtIds(MAX_COURTS).map((courtId) => {
+                    const active = planDraft.courtIds.includes(courtId);
+
+                    return (
+                      <Button
+                        key={courtId}
+                        type="button"
+                        variant="outline"
+                        onClick={() => togglePlanDraftCourt(courtId)}
+                        className={cn(
+                          'h-11 rounded-xl font-display text-xs font-bold',
+                          active
+                            ? 'border-secondary bg-secondary text-primary hover:bg-secondary hover:text-primary'
+                            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        )}
+                      >
+                        Court {courtId}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <p className="flex items-center gap-1 rounded-xl bg-muted px-3 py-2 text-xs font-medium text-muted-foreground">
+                <span>รอบถัดไป:</span>
+                <span className="ml-1 font-display font-bold text-foreground">
+                  {`${planDraft.courtIds.length > 0 ? formatCourtLabel(planDraft.courtIds) : 'ยังไม่เลือกคอร์ด'} · ${formatModeLabel(planDraft.mode)}`}
+                </span>
+              </p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={closePlanEditor}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={saveNextPlan}
+                disabled={planDraft.courtIds.length === 0}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                บันทึกแผน
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isClearAllConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              ยืนยันล้างทั้งหมด
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              การดำเนินการนี้จะลบผู้เล่น แมตช์ และสถิติทั้งหมดทันที
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setIsClearAllConfirmOpen(false)}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmClearAll}
+                className="rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                ล้างทั้งหมด
               </Button>
             </div>
           </div>
@@ -959,64 +1394,64 @@ export function HomePage() {
               </p>
             </div>
           </div>
-          {players.length > 0 && (
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              onClick={clearAll}
-              className="rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-              aria-label="ล้างทั้งหมด"
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8">
-        <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
-          <div className="space-y-5">
-            <ModeSelector value={mode} onChange={setMode} />
-            <CourtSelector value={courts} onChange={setCourts} />
-            <div className="flex items-center justify-between rounded-2xl bg-secondary p-3.5 text-xs">
-              <span className="font-medium text-secondary-foreground/70">
-                ต้องการผู้เล่นต่อรอบ อย่างน้อย
-              </span>
-              <span className="font-display text-base font-extrabold text-primary">
-                {requiredPlayers}{' '}
-                <span className="text-xs font-semibold text-secondary-foreground/60">
-                  คน
-                </span>
-              </span>
-            </div>
-          </div>
-        </section>
-
         <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
           <PlayerList
             players={players}
             onAddMany={addPlayers}
             onManage={openManagePlayer}
           />
-          <Button
-            type="button"
-            onClick={generateMatches}
-            disabled={players.length < playersPerMatch || matches.length > 0}
-            className="mt-4 h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
-          >
-            <Icon
-              icon="material-symbols-light:badminton-outline-rounded"
-              width="24"
-              height="24"
-              className="mr-2"
+        </section>
+
+        <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <div className="space-y-5">
+            <p className="text-xs font-medium text-muted-foreground">
+              เพิ่มผู้เล่นให้พอสำหรับ 1 แมตช์ก่อน แล้วค่อยเลือก Singles/Doubles
+              กับจำนวนคอร์ด
+            </p>
+            <ModeSelector
+              value={mode}
+              onChange={handleModeChange}
+              disabled={matches.length > 0}
             />
-            เริ่มจับคู่
-          </Button>
+            <CourtSelector
+              value={courts}
+              onChange={handleCourtCountChange}
+              disabled={matches.length > 0}
+            />
+            {matches.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  กำลังเล่นอยู่ ให้ใช้ปุ่ม “ปรับรอบถัดไป”
+                  เพื่อเปลี่ยนจำนวนคอร์ดหรือรูปแบบการแข่งขัน
+                </p>
+                <div className="rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-[11px]">
+                  <p className="font-display font-bold uppercase tracking-wide text-muted-foreground">
+                    เกมที่กำลังเล่น
+                  </p>
+                  <p className="mt-1 font-medium text-foreground">
+                    {currentSessionSummary ?? '-'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <Button
+              type="button"
+              onClick={generateMatches}
+              disabled={players.length < playersPerMatch || matches.length > 0}
+              className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
+            >
+              เริ่มจับคู่
+            </Button>
+          </div>
         </section>
 
         {matches.length > 0 && (
-          <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <section className="rounded-3xl border border-border/70 bg-card p-4 sm:p-6">
             <MatchBoard
               matches={matches}
               mode={mode}
@@ -1024,49 +1459,70 @@ export function HomePage() {
               restingPlayers={stats.restingPlayers}
               onStatusChange={updateMatchStatus}
               onFinish={finishMatch}
-              onRematch={rematch}
-              onCancel={cancelMatch}
               onSubstitutePlayer={requestSubstitutePlayer}
-              canUndoLatest={undoStack.length > 0}
-              onUndoLatest={undoLatest}
+              undoableCourtId={undoableCourtId}
+              onUndoCourtFinish={undoLatestFinishByCourt}
+              canUndoPlanLatest={canUndoLatestPlan}
+              onUndoPlanLatest={undoLatestPlan}
+              onOpenPlanEditor={openPlanEditor}
             />
-            <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-muted p-3 text-xs">
-              <span className="inline-flex flex-wrap items-center gap-1 font-medium text-muted-foreground">
-                <span className="inline-flex items-center">
-                  <span>กำลังเล่น</span>
-                  <span className="px-2 font-display font-extrabold text-foreground">
-                    {stats.playing}
-                  </span>
-                </span>
+            <div className="mt-4 rounded-2xl border border-border/60 bg-muted/35 px-3 py-2.5">
+              <div className="overflow-x-auto">
+                <div className="flex min-w-max items-center justify-between gap-4 text-[11px]">
+                  <div className="flex items-center gap-2 text-muted-foreground/90">
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-medium text-muted-foreground/90">
+                        กำลังเล่น:
+                      </span>
+                      <span className="font-display font-bold text-foreground/90">
+                        {stats.playing}
+                      </span>
+                    </span>
+                    <span>|</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-medium text-muted-foreground/90">
+                        พักอยู่:
+                      </span>
+                      <span className="font-display font-bold text-foreground/90">
+                        {stats.resting}
+                      </span>
+                    </span>
+                    <span>|</span>
+                    <span className="inline-flex items-center gap-1">
+                      <span className="font-medium text-muted-foreground/90">
+                        จบแล้ว:
+                      </span>
+                      <span className="font-display font-bold text-foreground/90">
+                        {totalFinishedMatches}
+                      </span>
+                    </span>
+                  </div>
 
-                <span className="px-1">·</span>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={resetStats}
+                      className="h-7 rounded-full px-2 font-display text-[10px] font-medium text-muted-foreground/85 hover:bg-background/60 hover:text-muted-foreground"
+                    >
+                      <RefreshCw className="h-3 w-3 opacity-70" />
+                      รีเซ็ตทั้งหมด
+                    </Button>
 
-                <span className="inline-flex items-center">
-                  <span>พักอยู่</span>
-                  <span className="px-2 font-display font-extrabold text-foreground">
-                    {stats.resting}
-                  </span>
-                </span>
-
-                <span className="px-1">·</span>
-
-                <span className="inline-flex items-center">
-                  <span>เล่นแล้ว</span>
-                  <span className="px-2 font-display font-extrabold text-foreground">
-                    {totalFinishedMatches}
-                  </span>
-                  <span>แมตช์</span>
-                </span>
-              </span>
-              <Button
-                type="button"
-                variant="link"
-                onClick={resetStats}
-                className="h-auto p-0 font-display font-bold text-tertiary"
-              >
-                <RefreshCw className="h-3 w-3" />
-                รีเซ็ตแมตท์ทั้งหมด
-              </Button>
+                    {players.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        onClick={requestClearAll}
+                        className="h-7 rounded-full px-2 font-display text-[10px] font-medium text-muted-foreground/85 hover:bg-background/60 hover:text-destructive/80"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 opacity-70" />
+                        ล้างทั้งหมด
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
         )}
@@ -1075,40 +1531,6 @@ export function HomePage() {
       <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-border/50 bg-background/80 backdrop-blur-xl">
         <div className="mx-auto w-full max-w-md px-4 py-3 pb-4">
           <div className="flex flex-col items-center gap-3">
-            {/* Actions */}
-            {/* <div className='flex flex-wrap items-center justify-center gap-2 rounded-full bg-muted/40 p-1 backdrop-blur'>
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={shareApp}
-                className='h-8 rounded-full px-3 text-xs font-semibold transition-all hover:bg-background hover:shadow-sm'
-              >
-                <Share2 className='mr-1.5 h-3.5 w-3.5' />
-                Share
-              </Button>
-
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={openHowToUse}
-                className='h-8 rounded-full px-3 text-xs font-semibold transition-all hover:bg-background hover:shadow-sm'
-              >
-                <BookOpenText className='mr-1.5 h-3.5 w-3.5' />
-                Guide
-              </Button>
-
-              <Button
-                type='button'
-                variant='ghost'
-                onClick={openDonate}
-                className='h-8 rounded-full px-3 text-xs font-semibold transition-all hover:bg-background hover:shadow-sm'
-              >
-                <Coffee className='mr-1.5 h-3.5 w-3.5' />
-                Donate
-              </Button>
-            </div> */}
-
-            {/* Branding */}
             <p className="text-xs font-medium text-muted-foreground">
               <span>Powered by</span>
               <span className="ml-1 font-display font-bold text-foreground">
