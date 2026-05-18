@@ -67,7 +67,7 @@ export function HomePage() {
     if (!input) return;
     input.focus();
     input.select();
-  }, [managePlayerDraft]);
+  }, [managePlayerDraft?.playerId]);
 
   const pushUndo = (label: string) => {
     setUndoStack((prev) => [
