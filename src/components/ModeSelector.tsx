@@ -7,6 +7,7 @@ export type Mode = 'singles' | 'doubles';
 interface ModeSelectorProps {
   value: Mode;
   onChange: (mode: Mode) => void;
+  disabled?: boolean;
 }
 
 const options: { value: Mode; label: string; sublabel: string }[] = [
@@ -14,7 +15,11 @@ const options: { value: Mode; label: string; sublabel: string }[] = [
   { value: 'doubles', label: 'Doubles', sublabel: '(2v2)' },
 ];
 
-export const ModeSelector = ({ value, onChange }: ModeSelectorProps) => {
+export const ModeSelector = ({
+  value,
+  onChange,
+  disabled = false,
+}: ModeSelectorProps) => {
   return (
     <div className='flex items-center justify-between gap-3'>
       <div className='flex items-center gap-2'>
@@ -33,12 +38,14 @@ export const ModeSelector = ({ value, onChange }: ModeSelectorProps) => {
               type='button'
               variant='ghost'
               size='sm'
+              disabled={disabled}
               onClick={() => onChange(opt.value)}
               className={cn(
                 'relative h-auto rounded-full px-3.5 py-2 font-display text-xs font-bold transition-smooth',
                 active
                   ? 'bg-secondary text-primary shadow-dark hover:bg-secondary hover:text-primary'
                   : 'text-muted-foreground hover:bg-card hover:text-foreground',
+                disabled && 'cursor-not-allowed opacity-70',
               )}
             >
               <span>{opt.label}</span>

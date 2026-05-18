@@ -23,6 +23,7 @@ import { PlayerList, type Player } from '@/components/PlayerList';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
+import { cn } from '@/lib/utils';
 
 type PendingSubstitute = {
   playerId: string;
@@ -35,6 +36,41 @@ type ManagePlayerDraft = {
   name: string;
 };
 
+type SessionPlan = {
+  mode: Mode;
+  courtIds: number[];
+};
+
+const MAX_COURTS = 3;
+
+const getCourtIds = (count: number) => {
+  return Array.from({ length: count }, (_, index) => index + 1);
+};
+
+const normalizeCourtIds = (courtIds: number[], fallbackCount: number) => {
+  const normalized = Array.from(
+    new Set(
+      courtIds.filter((courtId) => courtId >= 1 && courtId <= MAX_COURTS),
+    ),
+  ).sort((a, b) => a - b);
+
+  return normalized.length > 0
+    ? normalized
+    : getCourtIds(Math.min(Math.max(fallbackCount, 1), MAX_COURTS));
+};
+
+const getPlayersPerMatch = (sourceMode: Mode) => {
+  return sourceMode === 'singles' ? 2 : 4;
+};
+
+const formatModeLabel = (sourceMode: Mode) => {
+  return sourceMode === 'singles' ? 'Singles (1v1)' : 'Doubles (2v2)';
+};
+
+const formatCourtLabel = (courtIds: number[]) => {
+  return courtIds.map((courtId) => `Court ${courtId}`).join(', ');
+};
+
 export function HomePage() {
   const [mode, setMode] = useLocalStorage<Mode>('bm_mode', 'doubles');
   const [courts, setCourts] = useLocalStorage<number>('bm_courts', 1);
@@ -44,22 +80,58 @@ export function HomePage() {
     'bm_nextMatches',
     [],
   );
+  const [activeCourtIds, setActiveCourtIds] = useLocalStorage<number[]>(
+    'bm_activeCourtIds',
+    [],
+  );
+  const [nextPlan, setNextPlan] = useLocalStorage<SessionPlan | null>(
+    'bm_nextPlan',
+    null,
+  );
   const [totalFinishedMatches, setTotalFinishedMatches] =
     useLocalStorage<number>('bm_totalFinishedMatches', 0);
   const [managePlayerDraft, setManagePlayerDraft] =
     useState<ManagePlayerDraft | null>(null);
   const [pendingSubstitute, setPendingSubstitute] =
     useState<PendingSubstitute | null>(null);
+  const [planDraft, setPlanDraft] = useState<SessionPlan | null>(null);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
 
   type UndoSnapshot = {
+    mode: Mode;
+    courts: number;
     players: Player[];
     matches: Match[];
     nextMatches: Match[];
+    activeCourtIds: number[];
+    nextPlan: SessionPlan | null;
     totalFinishedMatches: number;
     label: string;
   };
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
+
+  const sessionCourtIds = useMemo(() => {
+    if (matches.length === 0) {
+      return getCourtIds(courts);
+    }
+
+    const courtIdsFromMatches = matches.map((match) => match.court);
+    const fallbackCourtIds =
+      courtIdsFromMatches.length > 0 ? courtIdsFromMatches : getCourtIds(courts);
+
+    return normalizeCourtIds(
+      activeCourtIds.length > 0 ? activeCourtIds : fallbackCourtIds,
+      courts,
+    );
+  }, [activeCourtIds, courts, matches]);
+
+  const currentPlan = useMemo<SessionPlan>(
+    () => ({
+      mode,
+      courtIds: sessionCourtIds,
+    }),
+    [mode, sessionCourtIds],
+  );
 
   useEffect(() => {
     if (!managePlayerDraft) return;
@@ -72,7 +144,17 @@ export function HomePage() {
   const pushUndo = (label: string) => {
     setUndoStack((prev) => [
       ...prev.slice(-4),
-      { players, matches, nextMatches, totalFinishedMatches, label },
+      {
+        mode,
+        courts,
+        players,
+        matches,
+        nextMatches,
+        activeCourtIds,
+        nextPlan,
+        totalFinishedMatches,
+        label,
+      },
     ]);
   };
 
@@ -80,9 +162,13 @@ export function HomePage() {
     setUndoStack((prev) => {
       if (prev.length === 0) return prev;
       const snapshot = prev.at(-1)!;
+      setMode(snapshot.mode);
+      setCourts(snapshot.courts);
       setPlayers(snapshot.players);
       setMatches(snapshot.matches);
       setNextMatches(snapshot.nextMatches);
+      setActiveCourtIds(snapshot.activeCourtIds);
+      setNextPlan(snapshot.nextPlan);
       setTotalFinishedMatches(snapshot.totalFinishedMatches);
       return prev.slice(0, -1);
     });
@@ -97,8 +183,11 @@ export function HomePage() {
     });
   };
 
-  const playersPerMatch = mode === 'singles' ? 2 : 4;
-  const requiredPlayers = playersPerMatch * courts;
+  const playersPerMatch = getPlayersPerMatch(mode);
+  const requiredPlayers = playersPerMatch * sessionCourtIds.length;
+  const nextPlanSummary = nextPlan
+    ? `${formatCourtLabel(nextPlan.courtIds)} · ${formatModeLabel(nextPlan.mode)}`
+    : undefined;
 
   const stats = useMemo(() => {
     const activeMatchIds = new Set(
@@ -203,7 +292,10 @@ export function HomePage() {
     sourcePlayers: Player[],
     recentlyPlayedIds: Set<string> = new Set(),
     blockedIds: Set<string> = new Set(),
+    plan: SessionPlan = currentPlan,
   ) => {
+    const planCourtIds = normalizeCourtIds(plan.courtIds, courts);
+    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
     const availablePlayers = sourcePlayers.filter(
       (player) => !blockedIds.has(player.id),
     );
@@ -212,19 +304,20 @@ export function HomePage() {
     const newMatches: Match[] = [];
     const used = new Set<string>();
 
-    for (let courtIndex = 0; courtIndex < courts; courtIndex += 1) {
+    for (const courtId of planCourtIds) {
       const slice = pool
         .filter((player) => !used.has(player.id))
-        .slice(0, playersPerMatch);
-      if (slice.length < playersPerMatch) {
+        .slice(0, planPlayersPerMatch);
+      if (slice.length < planPlayersPerMatch) {
         break;
       }
 
       slice.forEach((player) => used.add(player.id));
 
-      const half = playersPerMatch / 2;
+      const half = planPlayersPerMatch / 2;
       newMatches.push({
-        court: courtIndex + 1,
+        court: courtId,
+        mode: plan.mode,
         teamA: slice.slice(0, half),
         teamB: slice.slice(half),
         status: 'ready',
@@ -245,24 +338,29 @@ export function HomePage() {
     );
   };
 
-  const promoteNextRound = (sourcePlayers: Player[]) => {
-    if (nextMatches.length === 0) return false;
+  const pruneClosedCourtMatches = (
+    sourceMatches: Match[],
+    plan: SessionPlan = currentPlan,
+  ) => {
+    const plannedCourtIds = new Set(plan.courtIds);
 
-    const promotedMatches: Match[] = nextMatches.map((match) => ({
-      ...match,
-      status: 'ready',
-    }));
-    const used = new Set(
-      promotedMatches
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
-    const preview = buildMatchesFromPlayers(sourcePlayers, used, used);
+    return sourceMatches.filter((match) => {
+      return match.status !== 'done' || plannedCourtIds.has(match.court);
+    });
+  };
 
-    setPlayers(sourcePlayers);
-    setMatches(promotedMatches);
-    setNextMatches(preview.newMatches);
-    return true;
+  const isPlanActiveForCurrentMatches = (
+    sourceMatches: Match[],
+    plan: SessionPlan,
+  ) => {
+    const plannedCourtIds = new Set(plan.courtIds);
+    const openMatches = sourceMatches.filter((match) => match.status !== 'done');
+
+    if (openMatches.length === 0) return false;
+
+    return openMatches.every((match) => {
+      return plannedCourtIds.has(match.court) && match.mode === plan.mode;
+    });
   };
 
   const updateMatchStatus = (court: number, status: MatchStatus) => {
@@ -274,10 +372,19 @@ export function HomePage() {
   };
 
   const finishMatch = (court: number) => {
-    pushUndo(`จบแมตช์ Court ${court}`);
     const finishedMatch = matches.find((match) => match.court === court);
     if (!finishedMatch) return;
+
+    pushUndo(`จบแมตช์ Court ${court}`);
     setTotalFinishedMatches((prev) => prev + 1);
+
+    const plan = currentPlan;
+    const plannedCourtIds = new Set(plan.courtIds);
+    const clearNextPlanIfApplied = (sourceMatches: Match[]) => {
+      if (nextPlan && isPlanActiveForCurrentMatches(sourceMatches, nextPlan)) {
+        setNextPlan(null);
+      }
+    };
 
     const finishedPlayerIds = new Set(
       [...finishedMatch.teamA, ...finishedMatch.teamB].map(
@@ -289,17 +396,23 @@ export function HomePage() {
       finishedPlayerIds,
     );
 
-    const updatedMatches: Match[] = matches.map((match) =>
+    const markedDoneMatches: Match[] = matches.map((match) =>
       match.court === court ? { ...match, status: 'done' } : match,
     );
+    const updatedMatches = pruneClosedCourtMatches(markedDoneMatches, plan);
 
-    if (nextMatches.length > 0) {
+    if (plannedCourtIds.has(court) && nextMatches.length > 0) {
       const activeOtherIds = getActivePlayerIds(updatedMatches);
-      const nextIndex = nextMatches.findIndex((nextMatch) => {
+      const canUseNextMatch = (nextMatch: Match) => {
         return [...nextMatch.teamA, ...nextMatch.teamB].every(
           (player) => !activeOtherIds.has(player.id),
         );
+      };
+      const sameCourtIndex = nextMatches.findIndex((nextMatch) => {
+        return nextMatch.court === court && canUseNextMatch(nextMatch);
       });
+      const nextIndex =
+        sameCourtIndex >= 0 ? sameCourtIndex : nextMatches.findIndex(canUseNextMatch);
 
       if (nextIndex >= 0) {
         const nextUp = nextMatches[nextIndex];
@@ -308,6 +421,7 @@ export function HomePage() {
             ? {
                 ...nextUp,
                 court,
+                mode: nextUp.mode ?? plan.mode,
                 status: 'ready',
               }
             : match,
@@ -317,11 +431,13 @@ export function HomePage() {
           playersAfterFinish,
           activeAfterPullIds,
           activeAfterPullIds,
+          plan,
         );
 
         setPlayers(playersAfterFinish);
         setMatches(matchesAfterPull);
         setNextMatches(preview.newMatches);
+        clearNextPlanIfApplied(matchesAfterPull);
         showSnackbar({
           title: `Court ${court} จบแมตช์แล้ว`,
           description: `ดึงคู่ถัดไปขึ้น Court ${court} แล้ว`,
@@ -331,21 +447,86 @@ export function HomePage() {
       }
     }
 
-    setPlayers(playersAfterFinish);
-    setMatches(updatedMatches);
-
-    const isRoundFinished = updatedMatches.every(
-      (match) => match.status === 'done',
+    const activeAfterFinishIds = getActivePlayerIds(updatedMatches);
+    const preview = buildMatchesFromPlayers(
+      playersAfterFinish,
+      activeAfterFinishIds,
+      activeAfterFinishIds,
+      plan,
     );
-    if (isRoundFinished && nextMatches.length > 0) {
-      promoteNextRound(playersAfterFinish);
+    const sameCourtGeneratedIndex = preview.newMatches.findIndex(
+      (match) => match.court === court,
+    );
+    const canGenerateNextForCourt =
+      plannedCourtIds.has(court) && preview.newMatches.length > 0;
+    const generatedNextIndex = canGenerateNextForCourt
+      ? sameCourtGeneratedIndex >= 0
+        ? sameCourtGeneratedIndex
+        : 0
+      : -1;
+
+    if (generatedNextIndex >= 0) {
+      const nextUp = preview.newMatches[generatedNextIndex];
+      const matchesAfterGeneratedPull: Match[] = updatedMatches.map((match) =>
+        match.court === court
+          ? {
+              ...nextUp,
+              court,
+              mode: nextUp.mode ?? plan.mode,
+              status: 'ready',
+            }
+          : match,
+      );
+      const activeAfterGeneratedPullIds = getActivePlayerIds(
+        matchesAfterGeneratedPull,
+      );
+      const nextPreview = buildMatchesFromPlayers(
+        playersAfterFinish,
+        activeAfterGeneratedPullIds,
+        activeAfterGeneratedPullIds,
+        plan,
+      );
+
+      setPlayers(playersAfterFinish);
+      setMatches(matchesAfterGeneratedPull);
+      setNextMatches(nextPreview.newMatches);
+      clearNextPlanIfApplied(matchesAfterGeneratedPull);
       showSnackbar({
-        title: 'เริ่มรอบถัดไปอัตโนมัติ',
-        description: 'ดึงแมตช์ถัดไปขึ้นมาเป็นแมตช์ปัจจุบันแล้ว',
+        title: `Court ${court} จบแมตช์แล้ว`,
+        description: `จัดคู่ใหม่ขึ้น Court ${court} ตามแผนรอบถัดไปแล้ว`,
         variant: 'success',
       });
       return;
     }
+
+    const hasActiveMatches = updatedMatches.some(
+      (match) => match.status !== 'done',
+    );
+
+    if (!hasActiveMatches && preview.newMatches.length > 0) {
+      const nextPreview = buildMatchesFromPlayers(
+        playersAfterFinish,
+        preview.used,
+        preview.used,
+        plan,
+      );
+
+      setPlayers(playersAfterFinish);
+      setMatches(preview.newMatches);
+      setNextMatches(nextPreview.newMatches);
+      clearNextPlanIfApplied(preview.newMatches);
+      showSnackbar({
+        title: 'เริ่มรอบถัดไปอัตโนมัติ',
+        description: 'จัดคู่ใหม่ตามแผนรอบถัดไปแล้ว',
+        variant: 'success',
+      });
+      return;
+    }
+
+    setPlayers(playersAfterFinish);
+    setMatches(updatedMatches);
+    setNextMatches(preview.newMatches);
+    clearNextPlanIfApplied(updatedMatches);
 
     showSnackbar({
       title: `Court ${court} จบแมตช์แล้ว`,
@@ -689,6 +870,98 @@ export function HomePage() {
     });
   };
 
+  const handleModeChange = (nextMode: Mode) => {
+    setMode(nextMode);
+    setNextPlan(null);
+  };
+
+  const handleCourtCountChange = (nextCourts: number) => {
+    const normalizedCourts = Math.min(Math.max(nextCourts, 1), MAX_COURTS);
+
+    setCourts(normalizedCourts);
+    setActiveCourtIds(getCourtIds(normalizedCourts));
+    setNextPlan(null);
+  };
+
+  const openPlanEditor = () => {
+    const basePlan = nextPlan ?? currentPlan;
+
+    setPlanDraft({
+      mode: basePlan.mode,
+      courtIds: [...basePlan.courtIds],
+    });
+  };
+
+  const closePlanEditor = () => {
+    setPlanDraft(null);
+  };
+
+  const setPlanDraftMode = (nextMode: Mode) => {
+    setPlanDraft((prev) => (prev ? { ...prev, mode: nextMode } : prev));
+  };
+
+  const togglePlanDraftCourt = (courtId: number) => {
+    setPlanDraft((prev) => {
+      if (!prev) return prev;
+
+      const nextCourtIds = prev.courtIds.includes(courtId)
+        ? prev.courtIds.filter((id) => id !== courtId)
+        : [...prev.courtIds, courtId];
+
+      return {
+        ...prev,
+        courtIds: nextCourtIds.sort((a, b) => a - b),
+      };
+    });
+  };
+
+  const saveNextPlan = () => {
+    if (!planDraft) return;
+
+    if (planDraft.courtIds.length === 0) {
+      showSnackbar({
+        title: 'ยังไม่ได้เลือกคอร์ด',
+        description: 'เลือกอย่างน้อย 1 คอร์ดสำหรับรอบถัดไป',
+        variant: 'error',
+      });
+      return;
+    }
+
+    const plan: SessionPlan = {
+      mode: planDraft.mode,
+      courtIds: normalizeCourtIds(planDraft.courtIds, courts),
+    };
+    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
+    const planRequiredPlayers = planPlayersPerMatch * plan.courtIds.length;
+
+    if (players.length < planRequiredPlayers) {
+      showSnackbar({
+        title: 'ผู้เล่นไม่พอสำหรับแผนใหม่',
+        description: `ต้องมีอย่างน้อย ${planRequiredPlayers} คนสำหรับ ${formatCourtLabel(plan.courtIds)} · ${formatModeLabel(plan.mode)}`,
+        variant: 'error',
+      });
+      return;
+    }
+
+    pushUndo('เปลี่ยนแผนรอบถัดไป');
+
+    const activeIds = getActivePlayerIds(matches);
+    const preview = buildMatchesFromPlayers(players, activeIds, activeIds, plan);
+
+    setMode(plan.mode);
+    setCourts(plan.courtIds.length);
+    setActiveCourtIds(plan.courtIds);
+    setNextPlan(plan);
+    setNextMatches(preview.newMatches);
+    setPlanDraft(null);
+
+    showSnackbar({
+      title: 'เปลี่ยนแผนรอบถัดไปแล้ว',
+      description: 'คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว',
+      variant: 'success',
+    });
+  };
+
   const generateMatches = () => {
     if (matches.length > 0) {
       showSnackbar({
@@ -708,7 +981,16 @@ export function HomePage() {
       return;
     }
 
-    const currentRound = buildMatchesFromPlayers(players);
+    const startPlan: SessionPlan = {
+      mode,
+      courtIds: getCourtIds(courts),
+    };
+    const currentRound = buildMatchesFromPlayers(
+      players,
+      new Set(),
+      new Set(),
+      startPlan,
+    );
     if (currentRound.newMatches.length === 0) {
       showSnackbar({
         title: 'จับคู่ไม่สำเร็จ',
@@ -723,15 +1005,18 @@ export function HomePage() {
       players,
       activeAfterIds,
       activeAfterIds,
+      startPlan,
     );
 
     setPlayers(players);
     setMatches(currentRound.newMatches);
     setNextMatches(preview.newMatches);
+    setActiveCourtIds(startPlan.courtIds);
+    setNextPlan(null);
 
-    if (currentRound.newMatches.length < courts) {
+    if (currentRound.newMatches.length < startPlan.courtIds.length) {
       showSnackbar({
-        title: `จับคู่ได้ ${currentRound.newMatches.length}/${courts} คอร์ด`,
+        title: `จับคู่ได้ ${currentRound.newMatches.length}/${startPlan.courtIds.length} คอร์ด`,
         description: 'เพิ่มผู้เล่นเพื่อใช้ทุกคอร์ด',
         variant: 'info',
       });
@@ -745,6 +1030,9 @@ export function HomePage() {
     setPlayers(players.map((player) => ({ ...player, matches: 0 })));
     setMatches([]);
     setNextMatches([]);
+    setActiveCourtIds(getCourtIds(courts));
+    setNextPlan(null);
+    setPlanDraft(null);
     setTotalFinishedMatches(0);
     setUndoStack([]);
     showSnackbar({
@@ -758,6 +1046,9 @@ export function HomePage() {
     setPlayers([]);
     setMatches([]);
     setNextMatches([]);
+    setActiveCourtIds(getCourtIds(courts));
+    setNextPlan(null);
+    setPlanDraft(null);
     setTotalFinishedMatches(0);
     setUndoStack([]);
     toast.dismiss();
@@ -939,6 +1230,83 @@ export function HomePage() {
         </div>
       )}
 
+      {planDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              ปรับรอบถัดไป
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              เกมที่กำลังเล่นอยู่จะไม่เปลี่ยน ระบบจะใช้แผนนี้ตอนเติมคู่ถัดไป
+            </p>
+
+            <div className="mt-5 space-y-5">
+              <ModeSelector
+                value={planDraft.mode}
+                onChange={setPlanDraftMode}
+              />
+
+              <div className="space-y-2">
+                <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  เลือกคอร์ดที่จะใช้ต่อ
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {getCourtIds(MAX_COURTS).map((courtId) => {
+                    const active = planDraft.courtIds.includes(courtId);
+
+                    return (
+                      <Button
+                        key={courtId}
+                        type="button"
+                        variant="outline"
+                        onClick={() => togglePlanDraftCourt(courtId)}
+                        className={cn(
+                          'h-11 rounded-xl font-display text-xs font-bold',
+                          active
+                            ? 'border-secondary bg-secondary text-primary hover:bg-secondary hover:text-primary'
+                            : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        )}
+                      >
+                        Court {courtId}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <p className="rounded-xl bg-muted px-3 py-2 text-xs font-medium text-muted-foreground">
+                รอบถัดไป:{' '}
+                <span className="font-display font-bold text-foreground">
+                  {planDraft.courtIds.length > 0
+                    ? formatCourtLabel(planDraft.courtIds)
+                    : 'ยังไม่เลือกคอร์ด'}{' '}
+                  · {formatModeLabel(planDraft.mode)}
+                </span>
+              </p>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={closePlanEditor}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={saveNextPlan}
+                disabled={planDraft.courtIds.length === 0}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                บันทึกแผน
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/90 backdrop-blur-lg">
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5">
@@ -977,8 +1345,16 @@ export function HomePage() {
       <main className="mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8">
         <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
           <div className="space-y-5">
-            <ModeSelector value={mode} onChange={setMode} />
-            <CourtSelector value={courts} onChange={setCourts} />
+            <ModeSelector
+              value={mode}
+              onChange={handleModeChange}
+              disabled={matches.length > 0}
+            />
+            <CourtSelector
+              value={courts}
+              onChange={handleCourtCountChange}
+              disabled={matches.length > 0}
+            />
             <div className="flex items-center justify-between rounded-2xl bg-secondary p-3.5 text-xs">
               <span className="font-medium text-secondary-foreground/70">
                 ต้องการผู้เล่นต่อรอบ อย่างน้อย
@@ -990,6 +1366,12 @@ export function HomePage() {
                 </span>
               </span>
             </div>
+            {matches.length > 0 && (
+              <p className="text-xs font-medium text-muted-foreground">
+                กำลังเล่นอยู่ ให้ใช้ปุ่ม “ปรับรอบถัดไป”
+                เพื่อเปลี่ยนจำนวนคอร์ดหรือรูปแบบการแข่งขัน
+              </p>
+            )}
           </div>
         </section>
 
@@ -1029,6 +1411,8 @@ export function HomePage() {
               onSubstitutePlayer={requestSubstitutePlayer}
               canUndoLatest={undoStack.length > 0}
               onUndoLatest={undoLatest}
+              planSummary={nextPlanSummary}
+              onOpenPlanEditor={openPlanEditor}
             />
             <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-muted p-3 text-xs">
               <span className="inline-flex flex-wrap items-center gap-1 font-medium text-muted-foreground">
@@ -1051,11 +1435,11 @@ export function HomePage() {
                 <span className="px-1">·</span>
 
                 <span className="inline-flex items-center">
-                  <span>เล่นแล้ว</span>
+                  <span>จบแล้ว</span>
                   <span className="px-2 font-display font-extrabold text-foreground">
                     {totalFinishedMatches}
                   </span>
-                  <span>แมตช์</span>
+                  <span>เกม</span>
                 </span>
               </span>
               <Button
@@ -1065,7 +1449,7 @@ export function HomePage() {
                 className="h-auto p-0 font-display font-bold text-tertiary"
               >
                 <RefreshCw className="h-3 w-3" />
-                รีเซ็ตแมตท์ทั้งหมด
+                รีเซ็ตเกมทั้งหมด
               </Button>
             </div>
           </section>

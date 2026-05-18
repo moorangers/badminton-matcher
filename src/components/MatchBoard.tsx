@@ -6,6 +6,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  SlidersHorizontal,
   Swords,
   // XCircle,
 } from 'lucide-react';
@@ -20,6 +21,7 @@ export type MatchStatus = 'ready' | 'playing' | 'done';
 
 export interface Match {
   court: number;
+  mode: Mode;
   teamA: Player[];
   teamB: Player[];
   status: MatchStatus;
@@ -39,6 +41,8 @@ interface MatchBoardProps {
   onSubstitutePlayer?: (playerId: string) => void;
   canUndoLatest?: boolean;
   onUndoLatest?: () => void;
+  planSummary?: string;
+  onOpenPlanEditor?: () => void;
 }
 
 const statusConfig: Record<
@@ -79,21 +83,50 @@ export const MatchBoard = ({
   onSubstitutePlayer,
   canUndoLatest = false,
   onUndoLatest,
+  planSummary,
+  onOpenPlanEditor,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <h3 className="font-display text-base font-extrabold text-foreground">
           {title}
         </h3>
+        {showActions && onOpenPlanEditor && (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onOpenPlanEditor}
+            className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            ปรับรอบถัดไป
+          </Button>
+        )}
       </div>
+
+      {showActions && planSummary && (
+        <div className="rounded-2xl border border-tertiary/25 bg-tertiary/10 px-4 py-3 text-xs">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-display font-extrabold text-tertiary">
+              แผนรอบถัดไป
+            </span>
+            <span className="font-medium text-foreground">{planSummary}</span>
+          </div>
+          <p className="mt-1 font-medium text-muted-foreground">
+            คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว
+          </p>
+        </div>
+      )}
 
       <div className="space-y-3">
         {matches.map((m) => {
           const cfg = statusConfig[m.status];
           const StatusIcon = cfg.icon;
+          const matchMode = m.mode ?? mode;
           let statusClassName = 'border-border shadow-soft opacity-80';
 
           if (m.status === 'playing') {
@@ -116,7 +149,7 @@ export const MatchBoard = ({
                     Court {m.court}
                   </span>
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary-foreground/60">
-                    · {mode === 'singles' ? '1v1' : '2v2'}
+                    · {matchMode === 'singles' ? '1v1' : '2v2'}
                   </span>
                 </div>
                 <span
@@ -249,7 +282,8 @@ export const MatchBoard = ({
               <div key={`next-${match.court}`} className="text-xs">
                 <p className="flex items-center gap-2 font-medium text-foreground">
                   <span className="shrink-0 font-display font-bold text-muted-foreground">
-                    คู่ถัดไป (Court {match.court})
+                    คู่ถัดไป (Court {match.court} ·{' '}
+                    {(match.mode ?? mode) === 'singles' ? '1v1' : '2v2'})
                   </span>
 
                   <span className="min-w-0 truncate rounded-full border border-tertiary/30 bg-tertiary/10 px-3 py-1 text-tertiary shadow-sm">
