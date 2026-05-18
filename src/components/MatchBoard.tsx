@@ -8,7 +8,6 @@ import {
   RotateCcw,
   SlidersHorizontal,
   Swords,
-  // XCircle,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -36,12 +35,11 @@ interface MatchBoardProps {
   showActions?: boolean;
   onStatusChange?: (court: number, status: MatchStatus) => void;
   onFinish?: (court: number) => void;
-  onRematch?: (court: number) => void;
-  onCancel?: (court: number) => void;
   onSubstitutePlayer?: (playerId: string) => void;
-  canUndoLatest?: boolean;
-  onUndoLatest?: () => void;
-  planSummary?: string;
+  undoableCourtId?: number;
+  onUndoCourtFinish?: (court: number) => void;
+  canUndoPlanLatest?: boolean;
+  onUndoPlanLatest?: () => void;
   onOpenPlanEditor?: () => void;
 }
 
@@ -78,12 +76,11 @@ export const MatchBoard = ({
   showActions = true,
   onStatusChange,
   onFinish,
-  onRematch,
-  onCancel,
   onSubstitutePlayer,
-  canUndoLatest = false,
-  onUndoLatest,
-  planSummary,
+  undoableCourtId,
+  onUndoCourtFinish,
+  canUndoPlanLatest = false,
+  onUndoPlanLatest,
   onOpenPlanEditor,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
@@ -94,33 +91,35 @@ export const MatchBoard = ({
         <h3 className="font-display text-base font-extrabold text-foreground">
           {title}
         </h3>
-        {showActions && onOpenPlanEditor && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={onOpenPlanEditor}
-            className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
-          >
-            <SlidersHorizontal className="h-3.5 w-3.5" />
-            ปรับรอบถัดไป
-          </Button>
+        {showActions && (
+          <div className="flex items-center gap-2">
+            {canUndoPlanLatest && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => onUndoPlanLatest?.()}
+                className="h-8 rounded-full px-3 font-display text-xs font-bold"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                ย้อนแผนล่าสุด
+              </Button>
+            )}
+            {onOpenPlanEditor && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={onOpenPlanEditor}
+                className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                ปรับรอบถัดไป
+              </Button>
+            )}
+          </div>
         )}
       </div>
-
-      {showActions && planSummary && (
-        <div className="rounded-2xl border border-tertiary/25 bg-tertiary/10 px-4 py-3 text-xs">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-display font-extrabold text-tertiary">
-              แผนรอบถัดไป
-            </span>
-            <span className="font-medium text-foreground">{planSummary}</span>
-          </div>
-          <p className="mt-1 font-medium text-muted-foreground">
-            คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว
-          </p>
-        </div>
-      )}
 
       <div className="space-y-3">
         {matches.map((m) => {
@@ -225,44 +224,20 @@ export const MatchBoard = ({
                         จบแมตช์
                       </Button>
                     </div>
-                    <div className="flex shrink-0 justify-end">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => onUndoLatest?.()}
-                        disabled={!canUndoLatest}
-                        className={cn(
-                          'h-8 w-auto rounded-full px-2.5 font-display text-[11px] font-semibold text-muted-foreground transition-all duration-200 hover:bg-muted/60 hover:text-foreground',
-                          canUndoLatest
-                            ? 'opacity-85'
-                            : 'pointer-events-none opacity-0 sm:translate-y-1',
-                        )}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                        ย้อนกลับล่าสุด
-                      </Button>
-                    </div>
-                    {/* <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() => onRematch?.(m.court)}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold'
-                    >
-                      <RotateCcw className='h-3.5 w-3.5' />
-                      รีแมตช์
-                    </Button> */}
-                    {/* <Button
-                      type='button'
-                      size='sm'
-                      variant='outline'
-                      onClick={() => onCancel?.(m.court)}
-                      className='h-8 rounded-full px-3 font-display text-xs font-bold text-destructive hover:bg-destructive/10 hover:text-destructive'
-                    >
-                      <XCircle className='h-3.5 w-3.5' />
-                      ยกเลิกคอร์ด
-                    </Button> */}
+                    {undoableCourtId === m.court && (
+                      <div className="ml-auto flex shrink-0 justify-end">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => onUndoCourtFinish?.(m.court)}
+                          className="h-8 rounded-full px-3 font-display text-xs font-bold"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          ย้อนกลับคอร์ดนี้
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p className="text-xs font-medium text-muted-foreground">
@@ -276,7 +251,7 @@ export const MatchBoard = ({
       </div>
 
       {showActions && nextMatches.length > 0 && (
-        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+        <div className="rounded-2xl border border-border bg-muted/40 p-4">
           <div className="space-y-2">
             {nextMatches.map((match) => (
               <div key={`next-${match.court}`} className="text-xs">
@@ -303,7 +278,7 @@ export const MatchBoard = ({
       )}
 
       {showActions && restingPlayers.length > 0 && (
-        <div className="rounded-2xl border border-dashed border-border bg-muted/40 p-4">
+        <div className="rounded-2xl border border-border bg-muted/40 p-4">
           <div className="mb-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="flex h-6 w-6 items-center justify-center rounded-md bg-secondary/10 text-secondary">

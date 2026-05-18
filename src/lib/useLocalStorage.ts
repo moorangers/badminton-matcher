@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function useLocalStorage<T>(key: string, initialValue: T) {
+  const skipNextPersistRef = useRef(false);
   const [value, setValue] = useState<T>(() => {
     if (globalThis.window !== undefined) {
       try {
@@ -19,6 +20,11 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
 
   useEffect(() => {
     if (globalThis.window === undefined) return;
+    if (skipNextPersistRef.current) {
+      skipNextPersistRef.current = false;
+      return;
+    }
+
     try {
       globalThis.window.localStorage.setItem(key, JSON.stringify(value));
     } catch {
@@ -34,6 +40,8 @@ export function useLocalStorage<T>(key: string, initialValue: T) {
         // ignore
       }
     }
+
+    skipNextPersistRef.current = true;
     setValue(initialValue);
   };
 
