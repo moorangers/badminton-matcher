@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.4.0 (2026-05-18)
+
+- เพิ่มฟีเจอร์ "Change game" เปลี่ยนโหมดการเล่นระหว่าง session ได้ทันที
+- ปรับปรุง UI/UX ให้เหมาะกับทั้ง desktop และ mobile (responsive, ปุ่ม, modal, การแจ้งเตือน)
+- เพิ่ม/ปรับ logic การ undo, reset, clearAll, และการจัดการ state ให้ถูกต้องและปลอดภัย
+- ลบ dead code, import ที่ไม่ได้ใช้, และ refactor โค้ดให้สะอาดขึ้น
+- อัปเดต postcss เป็น 8.5.10 เพื่อปิดช่องโหว่ XSS
+- ปรับปรุง useLocalStorage ให้รองรับการ clear จริง (skip persist)
+- เพิ่มระบบยืนยัน (confirmation modal) ก่อนลบข้อมูลสำคัญ
+- ตรวจสอบและยืนยันว่า build ผ่าน ไม่มี error
+- อัปเดต README.md และ workflow การอัปเวอร์ชันให้ชัดเจน
+
 ## v0.3.0 (2026-05-16)
 
 - แยก flow เปลี่ยนตัวผู้เล่น ออกจาก ลบผู้เล่น ชัดเจน
