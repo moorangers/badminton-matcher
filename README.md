@@ -4,7 +4,7 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.4.1
+> Current Version: v0.4.2
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
