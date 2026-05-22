@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { Toaster } from '@/components/ui/sonner';
 import './globals.css';
 import { Analytics } from '@vercel/analytics/next';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 
 const notoSansThai = Noto_Sans_Thai({
   subsets: ['latin', 'thai'],
@@ -24,6 +25,7 @@ export default function RootLayout({
       <body className={`${notoSansThai.variable} font-sans`}>
         {children}
         <Analytics />
+        <SpeedInsights />
         <Toaster />
       </body>
     </html>
