@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { Icon } from '@iconify/react';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { HelpCircle, RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { CourtSelector } from '@/components/CourtSelector';
@@ -1048,21 +1049,30 @@ export function HomePage() {
     return (
       <div className="flex min-h-dvh items-center justify-center bg-gradient-surface px-4">
         <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-soft">
-          <div className="mb-5 flex items-center gap-2.5">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
-              <Icon
-                icon="mdi:badminton"
-                width="20"
-                height="20"
-                className="text-primary"
-              />
+          <div className="mb-5 flex items-center justify-between gap-2.5">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
+                <Icon
+                  icon="mdi:badminton"
+                  width="20"
+                  height="20"
+                  className="text-primary"
+                />
+              </div>
+              <div>
+                <h1 className="font-display text-base font-extrabold text-foreground">
+                  Badminton Matcher
+                </h1>
+                <p className="text-xs text-muted-foreground">สร้าง session ใหม่</p>
+              </div>
             </div>
-            <div>
-              <h1 className="font-display text-base font-extrabold text-foreground">
-                Badminton Matcher
-              </h1>
-              <p className="text-xs text-muted-foreground">สร้าง session ใหม่</p>
-            </div>
+            <Link
+              href="/how-to-use"
+              className="flex shrink-0 items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              วิธีใช้งาน
+            </Link>
           </div>
 
           <div className="space-y-5">
@@ -1421,6 +1431,13 @@ export function HomePage() {
               </p>
             </div>
           </div>
+          <Link
+            href="/how-to-use"
+            className="flex shrink-0 items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+          >
+            <HelpCircle className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">วิธีใช้งาน</span>
+          </Link>
         </div>
       </header>
 
