@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Coffee,
   GitMerge,
+  Loader2,
   Minus,
   Pause,
   Play,
@@ -50,6 +51,8 @@ interface MatchBoardProps {
   onUndoCourtFinish?: (court: number) => void;
   onOpenPlanEditor?: () => void;
   onResetStats?: () => void;
+  isResettingStats?: boolean;
+  pendingCourt?: number | null;
 }
 
 const statusConfig: Record<
@@ -92,6 +95,8 @@ export const MatchBoard = ({
   onUndoCourtFinish,
   onOpenPlanEditor,
   onResetStats,
+  isResettingStats = false,
+  pendingCourt = null,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
 
@@ -109,9 +114,14 @@ export const MatchBoard = ({
                 size="sm"
                 variant="ghost"
                 onClick={onResetStats}
+                disabled={isResettingStats}
                 className="h-8 shrink-0 rounded-full px-2.5 font-display text-xs font-bold text-muted-foreground"
               >
-                <RefreshCw className="h-3.5 w-3.5" />
+                {isResettingStats ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" />
+                )}
                 <span className="hidden sm:inline">รีเซ็ตสถิติ/แมตช์</span>
               </Button>
             )}
@@ -177,10 +187,15 @@ export const MatchBoard = ({
                     <button
                       type="button"
                       onClick={() => onCloseCourt(m.court)}
+                      disabled={pendingCourt === m.court}
                       aria-label="ปิดคอร์ด"
-                      className="flex items-center gap-1 rounded-full bg-card px-2 py-1 font-display text-[10px] font-bold text-muted-foreground shadow-sm transition-smooth hover:bg-destructive/10 hover:text-destructive"
+                      className="flex items-center gap-1 rounded-full bg-card px-2 py-1 font-display text-[10px] font-bold text-muted-foreground shadow-sm transition-smooth hover:bg-destructive/10 hover:text-destructive disabled:opacity-50"
                     >
-                      <GitMerge className="h-3 w-3" />
+                      {pendingCourt === m.court ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <GitMerge className="h-3 w-3" />
+                      )}
                       <span className="hidden sm:inline">ปิดคอร์ด</span>
                     </button>
                   )}
@@ -283,10 +298,14 @@ export const MatchBoard = ({
                         type="button"
                         size="sm"
                         onClick={() => onStatusChange?.(m.court, 'playing')}
-                        disabled={m.status === 'playing'}
+                        disabled={m.status === 'playing' || pendingCourt === m.court}
                         className="h-10 shrink-0 rounded-full px-4 font-display text-sm font-bold"
                       >
-                        <Play className="h-4 w-4" />
+                        {pendingCourt === m.court ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Play className="h-4 w-4" />
+                        )}
                         เริ่ม
                       </Button>
                       <Button
@@ -294,10 +313,14 @@ export const MatchBoard = ({
                         size="sm"
                         variant="secondary"
                         onClick={() => onFinish?.(m.court)}
-                        disabled={m.status !== 'playing'}
+                        disabled={m.status !== 'playing' || pendingCourt === m.court}
                         className="h-10 shrink-0 rounded-full px-4 font-display text-sm font-bold"
                       >
-                        <CheckCircle2 className="h-4 w-4" />
+                        {pendingCourt === m.court ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="h-4 w-4" />
+                        )}
                         จบแมตช์
                       </Button>
                     </div>
@@ -308,9 +331,14 @@ export const MatchBoard = ({
                           size="sm"
                           variant="ghost"
                           onClick={() => onUndoCourtFinish?.(m.court)}
+                          disabled={pendingCourt === m.court}
                           className="h-10 rounded-full px-4 font-display text-sm font-bold"
                         >
-                          <RotateCcw className="h-4 w-4" />
+                          {pendingCourt === m.court ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RotateCcw className="h-4 w-4" />
+                          )}
                           ย้อนกลับคอร์ดนี้
                         </Button>
                       </div>

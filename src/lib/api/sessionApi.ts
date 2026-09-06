@@ -117,6 +117,16 @@ export const verifySessionPin = (sessionId: string, pin: string) =>
     body: JSON.stringify({ pin }),
   });
 
+export const changeSessionPin = (
+  sessionId: string,
+  currentPin: string,
+  newPin: string,
+) =>
+  request<{ ok: true }>(`/sessions/${sessionId}/change-pin`, {
+    method: 'POST',
+    body: JSON.stringify({ currentPin, newPin }),
+  });
+
 export const resetSessionStats = (sessionId: string) =>
   request<{ ok: true }>(`/sessions/${sessionId}/reset-stats`, {
     method: 'POST',
