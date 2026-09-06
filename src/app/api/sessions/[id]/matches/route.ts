@@ -135,6 +135,7 @@ export async function POST(
     mode,
     teamA: teamAIds,
     teamB: teamBIds,
+    targetScore: session.targetScore,
   });
 
   await SessionPlayerModel.updateMany(

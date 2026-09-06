@@ -18,10 +18,11 @@
 ```ts
 {
   _id: ObjectId,
-  date: Date,
   mode: 'singles' | 'doubles',
   status: 'open' | 'closed',
   adminPinHash: string,     // PIN ที่แอดมินตั้งตอนสร้าง session (hash ไว้ ไม่เก็บ plain text)
+  activeCourts: number[],   // ค่า default สำหรับคอร์ดที่จะใช้ตอนสร้างแมตช์ใหม่ (แก้ผ่าน "ปรับรอบถัดไป"/"ปิดคอร์ด")
+  targetScore: number,      // ค่า default คะแนนเป้าหมายต่อเกมสำหรับแมตช์ใหม่ (ดู ADR-014)
   createdAt: Date,
 }
 ```
@@ -52,8 +53,9 @@
   guestName?: string,       // ถ้ามาจาก QR self check-in โดยไม่มี playerId
   status: 'registered' | 'checked_in' | 'resting' | 'playing',
   registeredAt: Date,
-  checkedInAt?: Date,       // ใช้เป็น wait-time fairness tie-breaker
+  checkedInAt?: Date,
   matchesPlayedInSession: number,
+  queuedAt: Date,           // เวลาที่เริ่มรอคิวล่าสุด — wait-time fairness tie-breaker (reset ทุกครั้งที่จบแมตช์/ถูกเปลี่ยนตัวออก)
 }
 ```
 
@@ -70,6 +72,10 @@
   status: 'ready' | 'playing' | 'done',
   startedAt?: Date,
   finishedAt?: Date,
+  statsCounted: boolean,    // true ถ้า transition ไป 'done' นี้ bump สถิติ/partnerHistory ไปแล้ว (ใช้ตอน undo-finish)
+  scoreA: number,           // คะแนนเกมปัจจุบัน (นับเกมเดียว ไม่ track best-of-3 — ดู ADR-013)
+  scoreB: number,
+  targetScore: number,      // snapshot จาก session.targetScore ตอนสร้างแมตช์ (เหมือน mode — ดู ADR-014)
 }
 ```
 

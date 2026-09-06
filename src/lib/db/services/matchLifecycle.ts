@@ -8,16 +8,20 @@ type MatchDoc = HydratedDocument<MatchDocument>;
 
 const pairKeyFor = (ids: string[]) => [...ids].sort().join('_');
 
-/** Standard badminton single-game scoring: first to 21, must win by 2,
- * hard cap at 30 (whoever reaches 30 wins outright regardless of margin). */
+/** Badminton-style single-game scoring, parameterized by target score
+ * (default 21): first to reach it wins if ahead by 2+; hard cap at
+ * target + 9 wins outright regardless of margin (generalizes the
+ * official 21-point game's 21/30 cap ratio to other targets like 11/15). */
 export function getGameWinner(
   scoreA: number,
   scoreB: number,
+  targetScore = 21,
 ): 'A' | 'B' | null {
-  if (scoreA >= 30) return 'A';
-  if (scoreB >= 30) return 'B';
-  if (scoreA >= 21 && scoreA - scoreB >= 2) return 'A';
-  if (scoreB >= 21 && scoreB - scoreA >= 2) return 'B';
+  const cap = targetScore + 9;
+  if (scoreA >= cap) return 'A';
+  if (scoreB >= cap) return 'B';
+  if (scoreA >= targetScore && scoreA - scoreB >= 2) return 'A';
+  if (scoreB >= targetScore && scoreB - scoreA >= 2) return 'B';
   return null;
 }
 
@@ -33,6 +37,7 @@ export const serializeMatch = (match: {
   statsCounted: boolean;
   scoreA: number;
   scoreB: number;
+  targetScore: number;
 }) => ({
   id: match._id.toString(),
   court: match.court,
@@ -45,7 +50,8 @@ export const serializeMatch = (match: {
   statsCounted: match.statsCounted,
   scoreA: match.scoreA,
   scoreB: match.scoreB,
-  gameWinner: getGameWinner(match.scoreA, match.scoreB),
+  targetScore: match.targetScore,
+  gameWinner: getGameWinner(match.scoreA, match.scoreB, match.targetScore),
 });
 
 /** Finds an active (non-done) match in this session that already contains

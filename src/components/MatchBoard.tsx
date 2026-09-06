@@ -29,6 +29,7 @@ export interface Match {
   status: MatchStatus;
   scoreA?: number;
   scoreB?: number;
+  targetScore?: number;
   gameWinner?: 'A' | 'B' | null;
 }
 
@@ -143,6 +144,7 @@ export const MatchBoard = ({
                   </span>
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-secondary-foreground/60">
                     · {matchMode === 'singles' ? '1v1' : '2v2'}
+                    {typeof m.targetScore === 'number' && ` · ${m.targetScore} แต้ม`}
                   </span>
                 </div>
                 <span

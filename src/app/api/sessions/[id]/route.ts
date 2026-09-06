@@ -2,22 +2,11 @@ import { NextResponse } from 'next/server';
 
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { SessionModel } from '@/lib/db/models/session';
-
-const MAX_COURT_NUMBER = 20;
-
-const serializeSession = (session: {
-  _id: { toString(): string };
-  mode: string;
-  status: string;
-  activeCourts: number[];
-  createdAt?: Date;
-}) => ({
-  id: session._id.toString(),
-  mode: session.mode,
-  status: session.status,
-  activeCourts: session.activeCourts,
-  createdAt: session.createdAt ?? null,
-});
+import {
+  isValidActiveCourts,
+  isValidTargetScore,
+  serializeSession,
+} from '@/lib/db/services/sessions';
 
 export async function GET(
   _request: Request,
@@ -43,6 +32,7 @@ export async function PATCH(
   const mode = body?.mode;
   const activeCourts = body?.activeCourts;
   const status = body?.status;
+  const targetScore = body?.targetScore;
 
   if (mode !== undefined && mode !== 'singles' && mode !== 'doubles') {
     return NextResponse.json(
@@ -50,26 +40,21 @@ export async function PATCH(
       { status: 400 },
     );
   }
-  if (activeCourts !== undefined) {
-    const isValid =
-      Array.isArray(activeCourts) &&
-      activeCourts.length > 0 &&
-      activeCourts.every(
-        (court) =>
-          typeof court === 'number' && court >= 1 && court <= MAX_COURT_NUMBER,
-      );
-    if (!isValid) {
-      return NextResponse.json(
-        {
-          error: `activeCourts must be a non-empty array of numbers between 1 and ${MAX_COURT_NUMBER}`,
-        },
-        { status: 400 },
-      );
-    }
+  if (activeCourts !== undefined && !isValidActiveCourts(activeCourts)) {
+    return NextResponse.json(
+      { error: 'activeCourts must be a non-empty array of court numbers' },
+      { status: 400 },
+    );
   }
   if (status !== undefined && status !== 'open' && status !== 'closed') {
     return NextResponse.json(
       { error: 'status must be "open" or "closed"' },
+      { status: 400 },
+    );
+  }
+  if (targetScore !== undefined && !isValidTargetScore(targetScore)) {
+    return NextResponse.json(
+      { error: 'targetScore must be a whole number between 1 and 99' },
       { status: 400 },
     );
   }
@@ -87,6 +72,7 @@ export async function PATCH(
     session.activeCourts = Array.from(new Set(courts)).sort((a, b) => a - b);
   }
   if (status !== undefined) session.status = status;
+  if (targetScore !== undefined) session.targetScore = targetScore;
 
   await session.save();
 

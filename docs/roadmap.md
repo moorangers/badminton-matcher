@@ -60,7 +60,8 @@
 **สถานะ:** done (2026-09-06) — เลือก **polling ทุก 2 วินาที** เป็น realtime layer, นับคะแนนแบบ **เกมเดียว** (ไม่ track best-of-3) ดู [decision-log.md#adr-013](./decision-log.md)
 **Dependency:** Phase 0 ✅
 
-- [x] UI นับคะแนนต่อแมตช์ — ปุ่ม +/- ต่อทีมบนการ์ดแมตช์ในหน้า dashboard, `POST /api/sessions/:id/matches/:matchId/score` (atomic `$inc` กัน race condition ตอนกดรัว ๆ — เจอบั๊กจริงระหว่างทดสอบและแก้แล้ว), คำนวณผู้ชนะเกมอัตโนมัติ (21 แต้ม win-by-2, cap 30) ผ่าน `getGameWinner()` ใน `matchLifecycle.ts`
+- [x] UI นับคะแนนต่อแมตช์ — ปุ่ม +/- ต่อทีมบนการ์ดแมตช์ในหน้า dashboard, `POST /api/sessions/:id/matches/:matchId/score` (atomic `$inc` กัน race condition ตอนกดรัว ๆ — เจอบั๊กจริงระหว่างทดสอบและแก้แล้ว), คำนวณผู้ชนะเกมอัตโนมัติ (win-by-2, cap ที่ targetScore+9) ผ่าน `getGameWinner()` ใน `matchLifecycle.ts`
+- [x] **คะแนนเป้าหมายต่อเกมปรับได้** (ไม่ fix ที่ 21) — `Session.targetScore` ตั้งได้ตอนสร้าง session, หน้า pre-game, และ "ปรับรอบถัดไป" (มี preset 11/15/21 + กำหนดเอง) แต่ละแมตช์เก็บ snapshot ของตัวเอง เปลี่ยนกลางเกมไม่กระทบแมตช์ที่กำลังเล่นอยู่ (ดู [decision-log.md#adr-014](./decision-log.md))
 - [x] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ — public page `/scoreboard/[sessionId]` ไม่ต้องมี PIN, poll ทุก 2 วินาที, ตัวอักษรใหญ่อ่านง่ายจากระยะไกล
 - [ ] ยังไม่ทำ: multi-game (best-of-3) tracking — นับแค่เกมเดียวต่อแมตช์ในตอนนี้ ถ้าจะทำ best-of-3 ค่อยว่ากันตอน Phase 5 (tournament) ที่น่าจะต้องการจริง ๆ
 

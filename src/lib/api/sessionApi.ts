@@ -11,6 +11,7 @@ export interface ApiSession {
   mode: ApiMode;
   status: 'open' | 'closed';
   activeCourts: number[];
+  targetScore: number;
   createdAt?: string | null;
 }
 
@@ -37,6 +38,7 @@ export interface ApiMatch {
   statsCounted?: boolean;
   scoreA: number;
   scoreB: number;
+  targetScore: number;
   gameWinner: 'A' | 'B' | null;
 }
 
@@ -79,10 +81,11 @@ export const createSession = (
   mode: ApiMode,
   pin: string,
   activeCourts: number[],
+  targetScore: number,
 ) =>
   request<ApiSession>('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ mode, pin, activeCourts }),
+    body: JSON.stringify({ mode, pin, activeCourts, targetScore }),
   });
 
 export const getSession = (sessionId: string) =>
@@ -90,7 +93,9 @@ export const getSession = (sessionId: string) =>
 
 export const updateSession = (
   sessionId: string,
-  patch: Partial<Pick<ApiSession, 'mode' | 'activeCourts' | 'status'>>,
+  patch: Partial<
+    Pick<ApiSession, 'mode' | 'activeCourts' | 'status' | 'targetScore'>
+  >,
 ) =>
   request<ApiSession>(`/sessions/${sessionId}`, {
     method: 'PATCH',

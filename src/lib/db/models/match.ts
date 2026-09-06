@@ -20,6 +20,9 @@ const matchSchema = new Schema({
   // คะแนนเกมปัจจุบัน (นับแต้มเดียว ไม่ track หลายเกมต่อแมตช์ — ดู ADR-013)
   scoreA: { type: Number, required: true, default: 0, min: 0 },
   scoreB: { type: Number, required: true, default: 0, min: 0 },
+  // snapshot จาก session.targetScore ตอนสร้างแมตช์ (เหมือน mode) — เปลี่ยน
+  // session.targetScore ทีหลังจะไม่กระทบแมตช์ที่สร้างไปแล้ว
+  targetScore: { type: Number, required: true, default: 21, min: 1, max: 99 },
 });
 
 matchSchema.index({ sessionId: 1, status: 1 });

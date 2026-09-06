@@ -23,6 +23,7 @@ import {
 import { ModeSelector, type Mode } from '@/components/ModeSelector';
 import { PlayerList, type Player } from '@/components/PlayerList';
 import { QrCode } from '@/components/QrCode';
+import { TargetScoreSelector } from '@/components/TargetScoreSelector';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
@@ -64,6 +65,10 @@ const MAX_COURTS = 3;
 const PIN_PATTERN = /^\d{4,6}$/;
 
 type SessionPlan = { mode: Mode; courtIds: number[] };
+// The plan editor also lets the admin adjust targetScore for future
+// rounds — kept separate from SessionPlan since the pure matching
+// algorithm below only ever needs mode/courtIds.
+type PlanDraft = SessionPlan & { targetScore: number };
 
 type PendingSubstitute = {
   playerId: string;
@@ -223,6 +228,7 @@ export function HomePage() {
   // ---- create-session form ----
   const [createMode, setCreateMode] = useState<Mode>('doubles');
   const [createCourts, setCreateCourts] = useState(1);
+  const [createTargetScore, setCreateTargetScore] = useState(21);
   const [createPin, setCreatePin] = useState('');
   const [isCreatingSession, setIsCreatingSession] = useState(false);
 
@@ -251,6 +257,7 @@ export function HomePage() {
   // ---- pre-game draft (only used while there are no active matches yet) ----
   const [draftMode, setDraftMode] = useState<Mode>('doubles');
   const [draftCourts, setDraftCourts] = useState(1);
+  const [draftTargetScore, setDraftTargetScore] = useState(21);
 
   // ---- misc UI state (same shape as before) ----
   const [managePlayerDraft, setManagePlayerDraft] =
@@ -260,7 +267,7 @@ export function HomePage() {
   const [pendingCourtClose, setPendingCourtClose] = useState<number | null>(
     null,
   );
-  const [planDraft, setPlanDraft] = useState<SessionPlan | null>(null);
+  const [planDraft, setPlanDraft] = useState<PlanDraft | null>(null);
   const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
 
@@ -310,6 +317,7 @@ export function HomePage() {
         setSession(fetched);
         setDraftMode(fetched.mode);
         setDraftCourts(fetched.activeCourts.length);
+        setDraftTargetScore(fetched.targetScore);
       } catch {
         if (cancelled) return;
         window.localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -428,6 +436,7 @@ export function HomePage() {
         finishedAt: match.finishedAt ?? null,
         scoreA: match.scoreA,
         scoreB: match.scoreB,
+        targetScore: match.targetScore,
         gameWinner: match.gameWinner,
         teamA: match.teamA
           .map((playerId) => playerById.get(playerId))
@@ -497,6 +506,10 @@ export function HomePage() {
     activeMatches.length > 0
       ? (session?.activeCourts.length ?? draftCourts)
       : draftCourts;
+  const displayTargetScore =
+    activeMatches.length > 0
+      ? (session?.targetScore ?? draftTargetScore)
+      : draftTargetScore;
 
   // ---- session bootstrap actions ----
 
@@ -513,13 +526,19 @@ export function HomePage() {
     setIsCreatingSession(true);
     try {
       const courtIds = getCourtIds(createCourts);
-      const created = await createSession(createMode, createPin, courtIds);
+      const created = await createSession(
+        createMode,
+        createPin,
+        courtIds,
+        createTargetScore,
+      );
       window.localStorage.setItem(SESSION_STORAGE_KEY, created.id);
       setSessionId(created.id);
       setSession(created);
       setIsAuthenticated(true);
       setDraftMode(created.mode);
       setDraftCourts(created.activeCourts.length);
+      setDraftTargetScore(created.targetScore);
       setCreatePin('');
     } catch (error) {
       showSnackbar({
@@ -957,13 +976,21 @@ export function HomePage() {
 
   const openPlanEditor = () => {
     if (!session) return;
-    setPlanDraft({ mode: session.mode, courtIds: [...session.activeCourts] });
+    setPlanDraft({
+      mode: session.mode,
+      courtIds: [...session.activeCourts],
+      targetScore: session.targetScore,
+    });
   };
 
   const closePlanEditor = () => setPlanDraft(null);
 
   const setPlanDraftMode = (nextMode: Mode) => {
     setPlanDraft((prev) => (prev ? { ...prev, mode: nextMode } : prev));
+  };
+
+  const setPlanDraftTargetScore = (nextTargetScore: number) => {
+    setPlanDraft((prev) => (prev ? { ...prev, targetScore: nextTargetScore } : prev));
   };
 
   const togglePlanDraftCourt = (courtId: number) => {
@@ -1003,6 +1030,7 @@ export function HomePage() {
       await updateSession(sessionId, {
         mode: planDraft.mode,
         activeCourts: planDraft.courtIds,
+        targetScore: planDraft.targetScore,
       });
       await refreshAll(sessionId);
       setPlanDraft(null);
@@ -1052,7 +1080,11 @@ export function HomePage() {
     const courtIds = getCourtIds(draftCourts);
 
     try {
-      await updateSession(sessionId, { mode: draftMode, activeCourts: courtIds });
+      await updateSession(sessionId, {
+        mode: draftMode,
+        activeCourts: courtIds,
+        targetScore: draftTargetScore,
+      });
 
       const [freshPlayers, freshHistoryList] = await Promise.all([
         listSessionPlayers(sessionId),
@@ -1267,6 +1299,10 @@ export function HomePage() {
           <div className="space-y-5">
             <ModeSelector value={createMode} onChange={setCreateMode} />
             <CourtSelector value={createCourts} onChange={setCreateCourts} />
+            <TargetScoreSelector
+              value={createTargetScore}
+              onChange={setCreateTargetScore}
+            />
 
             <div className="space-y-2">
               <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1511,6 +1547,10 @@ export function HomePage() {
 
             <div className="mt-5 space-y-5">
               <ModeSelector value={planDraft.mode} onChange={setPlanDraftMode} />
+              <TargetScoreSelector
+                value={planDraft.targetScore}
+                onChange={setPlanDraftTargetScore}
+              />
 
               <div className="space-y-2">
                 <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1849,6 +1889,11 @@ export function HomePage() {
             <CourtSelector
               value={displayCourts}
               onChange={handleCourtCountChange}
+              disabled={activeMatches.length > 0}
+            />
+            <TargetScoreSelector
+              value={displayTargetScore}
+              onChange={setDraftTargetScore}
               disabled={activeMatches.length > 0}
             />
             {activeMatches.length > 0 && (
