@@ -45,12 +45,15 @@
 
 ## Phase 3 — Webboard / Post Report
 
-**สถานะ:** not-started
-**Dependency:** Phase 0 ✅ + เลือก file storage (Vercel Blob/Cloudinary/S3 — ยังไม่ confirm)
+**สถานะ:** done (2026-09-06) — เลือก **Vercel Blob** เป็น file storage (ดู [decision-log.md#adr-011](./decision-log.md))
+**Dependency:** Phase 0 ✅
 
-- [ ] โพสต์ข้อความ + รูปภาพต่อ session/club
-- [ ] หน้า feed แสดงโพสต์ย้อนหลัง
-- [ ] Auth สำหรับคนโพสต์ (admin หรือสมาชิกทุกคนโพสต์ได้ — ยังไม่ confirm)
+- [x] โพสต์ข้อความ + รูปภาพ — `POST /api/posts` (สร้าง), `GET /api/posts` (list แบบ cursor pagination), `DELETE /api/posts/:postId` — เก็บเป็น feed เดียวทั้ง deployment ไม่ผูกกับ session ใดโดยเฉพาะ (`sessionId` เป็นแค่ reference เผื่ออยากรู้ว่าโพสต์ตอนไหน)
+- [x] หน้า feed แสดงโพสต์ย้อนหลัง — public page `/board` ไม่ต้องมี PIN (ให้ทั้งชมรมดูได้ ไม่ใช่แค่คนมี PIN)
+- [x] โพสต์ได้จากหน้า dashboard เท่านั้น (เหมือน action อื่น ๆ ที่ผ่าน PIN gate ฝั่ง client — ไม่ได้ enforce PIN ที่ server เหมือนกับทุก endpoint อื่นในโปรเจกต์นี้)
+- [x] อัปโหลดรูปตรงจากเบราว์เซอร์ไปที่ Vercel Blob เลย (ไม่ผ่าน server ก่อน) เพื่อเลี่ยง serverless request body size limit (~4.5MB) ที่รูปจากมือถือมักเกิน
+- [x] Validation พื้นฐาน: จำกัด 6 รูป/โพสต์, 10MB/รูป, เฉพาะ jpeg/png/webp/heic
+- [ ] **ยังไม่ได้ทดสอบการอัปโหลดรูปจริงกับ Vercel Blob** — ต้อง enable Blob storage ในโปรเจกต์ Vercel ก่อน (ดู README ส่วน Troubleshooting) ทดสอบแล้วแค่ path โพสต์ข้อความล้วนกับ path ที่ไม่มี token แล้ว error สุภาพ (ไม่ crash)
 
 ## Phase 4 — ระบบนับคะแนน + Live Scoreboard
 

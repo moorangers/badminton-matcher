@@ -4,7 +4,7 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.7.0
+> Current Version: v0.8.0
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
@@ -44,6 +44,7 @@
 - **เพิ่มผู้เล่นระหว่างเกม** — คู่ถัดไปจะถูก regenerate ทันทีโดยผู้เล่นใหม่จะถูก prioritize เข้าสนามก่อน
 - **ลบผู้เล่นระหว่างเกม** — ถ้าผู้เล่นไม่ได้อยู่ใน active match จะลบได้ทันที และ regenerate คู่ถัดไป / ถ้าอยู่ใน active match จะเปิด flow เปลี่ยนตัวก่อน
 - **Substitute Player** — กดไอคอน `⇄` ที่ชื่อผู้เล่นใน court card ได้โดยตรง ระบบจะ confirm แล้วสุ่มคนพักมาแทนอัตโนมัติ ผู้เล่นเดิมจะ `ไปพัก` (ไม่ถูกลบจากรายชื่อ)
+- **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพจากหน้า dashboard (เช่น รายงานว่าวันนี้มากี่คน) รูปอัปโหลดตรงไปที่ Vercel Blob จากเบราว์เซอร์เลย ใครก็ดู feed ได้ที่หน้า `/board` โดยไม่ต้องมี PIN
 - ปุ่มรีเซ็ตสถิติ (ล้างแมตช์/สถิติ แต่คง session ไว้) และปุ่มออกจาก session (ลืม session บนเครื่องนี้ ไม่ลบข้อมูลบนเซิร์ฟเวอร์)
 - **บันทึกลง MongoDB จริง** — ผู้เล่น/แมตช์/สถิติ/partner history ทั้งหมดอยู่บนเซิร์ฟเวอร์ผูกกับ session id ไม่ใช่ browser เดียวอีกต่อไป ปิด-เปิดหน้าใหม่ (ใส่ PIN ยืนยันอีกครั้ง) ข้อมูลยังอยู่ครบ
 - **ย้อนกลับล่าสุด (Undo)** — ปุ่ม `ย้อนกลับคอร์ดนี้` โผล่เฉพาะคอร์ดที่กด `จบแมตช์` ล่าสุดจริง ๆ เท่านั้น (ครั้งเดียว ไม่ใช่ stack หลายขั้น) ยกเลิกไม่ได้ถ้ามีคนถูกจัดลงแมตช์อื่นไปแล้วหลังจากนั้น
@@ -59,6 +60,7 @@
 - `lucide-react` + `@iconify/react` (icons)
 - `qrcode` (QR code generation for the self check-in link)
 - `mongoose` (MongoDB) + `bcryptjs` (PIN hashing)
+- `@vercel/blob` (photo storage for the webboard)
 
 ## Project Structure
 
@@ -71,9 +73,13 @@ src/
     not-found.tsx
     how-to-use/page.tsx      # in-app usage guide
     checkin/[sessionId]/page.tsx  # public self check-in page (no PIN)
+    board/page.tsx           # public webboard feed (no PIN)
     api/
       health/route.ts
       players/[playerId]/route.ts
+      posts/route.ts                 # webboard: list/create
+      posts/[postId]/route.ts        # webboard: delete
+      posts/upload/route.ts          # Vercel Blob client-upload handler
       sessions/route.ts
       sessions/[id]/route.ts
       sessions/[id]/close-court/route.ts
@@ -104,10 +110,11 @@ src/
     utils.ts
     appVersion.ts
     api/sessionApi.ts       # typed fetch client the UI uses to call the API above
+    api/postsApi.ts         # webboard client (list/create/delete + Blob upload helper)
     auth/pin.ts             # PIN hash/verify (bcrypt)
     db/
       mongodb.ts            # connection singleton
-      models/               # mongoose schemas (session, player, sessionPlayer, match, partnerHistory)
+      models/               # mongoose schemas (session, player, sessionPlayer, match, partnerHistory, post)
       services/
         matchLifecycle.ts   # shared stat/partner-history bump+revert logic
         sessionPlayers.ts   # shared add-player/find-by-name-or-id logic (admin + public register/checkin)
@@ -138,9 +145,10 @@ yarn dev
 
 หน้าเว็บหลักเรียก API จริงแล้ว (ไม่ใช่ localStorage) — ทุก action (เพิ่มผู้เล่น, จับคู่, จบแมตช์, ปิดคอร์ด ฯลฯ) ต้องมี MongoDB ต่ออยู่ถึงจะใช้งานได้ รายละเอียด endpoint ทั้งหมดดู [docs/roadmap.md](docs/roadmap.md) และ [docs/database-design.md](docs/database-design.md)
 
-1. ต้องมี MongoDB รันอยู่แล้ว (local container หรือ Atlas ก็ได้ — โปรเจกต์นี้ไม่มี docker-compose ของตัวเอง เพราะ dev เครื่องนี้ใช้ container ที่มีอยู่แล้วร่วมกับโปรเจกต์อื่น ดู [docs/decision-log.md#adr-008](docs/decision-log.md#adr-008))
-2. คัดลอก `.env.example` เป็น `.env` แล้วปรับ `MONGODB_URI` ให้ชี้ไปที่ MongoDB ของตัวเอง (ใช้ database name แยกจากโปรเจกต์อื่น)
+1. ต้องมี MongoDB รันอยู่แล้ว — **ใช้ local container สำหรับ dev เท่านั้น อย่าใช้ Atlas จริงตรง ๆ** (โปรเจกต์นี้ไม่มี docker-compose ของตัวเอง เพราะ dev เครื่องนี้ใช้ container ที่มีอยู่แล้วร่วมกับโปรเจกต์อื่น ดู [docs/decision-log.md#adr-008](docs/decision-log.md#adr-008) และ [#adr-012](docs/decision-log.md#adr-012) ว่าทำไมถึงสำคัญ)
+2. คัดลอก `.env.example` เป็น `.env` แล้วปรับ `MONGODB_URI` ให้ชี้ไปที่ MongoDB local ของตัวเอง (ใช้ database name แยกจากโปรเจกต์อื่น)
 3. `yarn dev` แล้วลองยิง `GET /api/health` เพื่อเช็คว่าเชื่อม MongoDB สำเร็จ ก่อนเปิดหน้าเว็บหลัก
+4. (ถ้าจะทดสอบอัปโหลดรูปในกระดานข่าว) เพิ่ม `BLOB_READ_WRITE_TOKEN` ใน `.env` — คัดลอกมาจาก Vercel project ที่ enable Blob storage แล้ว (Storage tab) ไม่งั้นการโพสต์ข้อความล้วนยังใช้ได้ปกติ แต่แนบรูปจะ error สุภาพว่ายังไม่ได้ตั้งค่า
 
 ## Available Scripts
 
@@ -166,6 +174,7 @@ yarn dev
 
 ## Troubleshooting
 
+- **⚠️ ก่อนรันคำสั่งที่ล้างข้อมูล (`dropDatabase()` หรือคล้ายกัน) ระหว่างทดสอบ ให้ `cat .env` เช็คก่อนเสมอว่า `MONGODB_URI` ยังชี้ `localhost` อยู่** — เคยเกิดเหตุการณ์ local `.env` ถูกแก้ให้ชี้ไป Atlas จริงตอน debug deploy แล้วลืมเปลี่ยนกลับ ทำให้การทดสอบไปกระทบ database จริงที่ deploy ใช้งานอยู่โดยไม่ตั้งใจ (ดู [docs/decision-log.md#adr-012](docs/decision-log.md#adr-012)) ค่า connection string ของ Atlas จริงควรอยู่ใน Vercel Environment Variables เท่านั้น ไม่ใส่ใน `.env` ของเครื่อง dev
 - **API route ตอบ 404 ทั้งที่ไฟล์ `route.ts` มีอยู่จริง** (โดยเฉพาะถ้าเพิ่งสลับไปมาระหว่าง `yarn build` กับ `yarn dev`) — `.next` cache ค้าง แก้ด้วย `rm -rf .next && yarn dev` ใหม่
 - **Deploy บน Vercel แล้ว MongooseServerSelectionError / connect ไม่ได้** — MongoDB Atlas ยัง whitelist เฉพาะ IP เดิมอยู่ แต่ Vercel serverless function ไม่มี IP คงที่ ต้องไปที่ Atlas → Security → Network Access → Add IP Address → **Allow Access From Anywhere (0.0.0.0/0)** (ยังต้องมี username/password ถูกต้องอยู่ดี ไม่ใช่เปิดโล่งไม่มีการป้องกัน)
 - **ข้อมูลไปโผล่ที่ database ชื่อ `test` แทนที่จะเป็น `badminton-matcher`** — connection string ที่ copy จากปุ่ม "Connect" ใน Atlas ไม่มีชื่อ database อยู่ในนั้น (เช่น `mongodb+srv://user:pass@cluster0.xxx.mongodb.net/?retryWrites=true...`) พอไม่ระบุมา MongoDB driver จะ default ไปที่ database ชื่อ `test` ให้เอง ต้องเติมชื่อ database เข้าไปเองก่อน `?` เช่น `.../badminton-matcher?retryWrites=true...`

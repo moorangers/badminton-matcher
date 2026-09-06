@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Icon } from '@iconify/react';
-import { HelpCircle, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  HelpCircle,
+  ImagePlus,
+  Newspaper,
+  RefreshCw,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 
 import { CourtSelector } from '@/components/CourtSelector';
@@ -42,6 +49,13 @@ import {
   type ApiSession,
   type ApiSessionPlayer,
 } from '@/lib/api/sessionApi';
+import {
+  createPost,
+  deletePost,
+  listPosts,
+  uploadPostPhoto,
+  type ApiPost,
+} from '@/lib/api/postsApi';
 
 const SESSION_STORAGE_KEY = 'bm_session_id';
 const MAX_COURTS = 3;
@@ -225,6 +239,13 @@ export function HomePage() {
   );
   const [nextMatches, setNextMatches] = useState<Match[]>([]);
 
+  // ---- webboard (Phase 3) ----
+  const [recentPosts, setRecentPosts] = useState<ApiPost[]>([]);
+  const [postText, setPostText] = useState('');
+  const [postPhotoFiles, setPostPhotoFiles] = useState<File[]>([]);
+  const [isPosting, setIsPosting] = useState(false);
+  const postFileInputRef = useRef<HTMLInputElement>(null);
+
   // ---- pre-game draft (only used while there are no active matches yet) ----
   const [draftMode, setDraftMode] = useState<Mode>('doubles');
   const [draftCourts, setDraftCourts] = useState(1);
@@ -344,9 +365,20 @@ export function HomePage() {
     }
   };
 
+  const refreshPosts = async () => {
+    try {
+      const { posts } = await listPosts();
+      setRecentPosts(posts.slice(0, 5));
+    } catch {
+      // webboard is a secondary feature — fail quietly, main dashboard
+      // still works without it
+    }
+  };
+
   useEffect(() => {
     if (sessionId && isAuthenticated) {
       refreshAll(sessionId);
+      refreshPosts();
     }
   }, [sessionId, isAuthenticated]);
 
@@ -1069,6 +1101,69 @@ export function HomePage() {
     setIsClearAllConfirmOpen(false);
   };
 
+  // ---- webboard ----
+
+  const MAX_POST_PHOTOS = 6;
+
+  const addPostPhotoFiles = (files: FileList | null) => {
+    if (!files) return;
+    setPostPhotoFiles((prev) =>
+      [...prev, ...Array.from(files)].slice(0, MAX_POST_PHOTOS),
+    );
+    if (postFileInputRef.current) postFileInputRef.current.value = '';
+  };
+
+  const removePostPhotoFile = (index: number) => {
+    setPostPhotoFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const submitPost = async () => {
+    const trimmed = postText.trim();
+    if (!trimmed && postPhotoFiles.length === 0) return;
+
+    setIsPosting(true);
+    try {
+      const photoUrls = await Promise.all(
+        postPhotoFiles.map((file) => uploadPostPhoto(file)),
+      );
+      await createPost({
+        text: trimmed,
+        photoUrls,
+        sessionId: sessionId ?? undefined,
+      });
+      setPostText('');
+      setPostPhotoFiles([]);
+      await refreshPosts();
+      showSnackbar({
+        title: 'โพสต์แล้ว',
+        description: 'ขึ้นกระดานข่าวเรียบร้อย',
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'โพสต์ไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  const removePost = async (postId: string) => {
+    try {
+      await deletePost(postId);
+      await refreshPosts();
+      toast.success('ลบโพสต์แล้ว');
+    } catch (error) {
+      showSnackbar({
+        title: 'ลบโพสต์ไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
+  };
+
   const managedPlayer = managePlayerDraft
     ? players.find((player) => player.id === managePlayerDraft.sessionPlayerId)
     : null;
@@ -1116,13 +1211,22 @@ export function HomePage() {
                 <p className="text-xs text-muted-foreground">สร้าง session ใหม่</p>
               </div>
             </div>
-            <Link
-              href="/how-to-use"
-              className="flex shrink-0 items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-            >
-              <HelpCircle className="h-3.5 w-3.5" />
-              วิธีใช้งาน
-            </Link>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <Link
+                href="/board"
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                aria-label="กระดานข่าว"
+              >
+                <Newspaper className="h-3.5 w-3.5" />
+              </Link>
+              <Link
+                href="/how-to-use"
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <HelpCircle className="h-3.5 w-3.5" />
+                วิธีใช้งาน
+              </Link>
+            </div>
           </div>
 
           <div className="space-y-5">
@@ -1571,6 +1675,115 @@ export function HomePage() {
                   คัดลอกลิงก์
                 </Button>
               </div>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Newspaper className="h-4 w-4 text-muted-foreground" />
+              <h3 className="font-display text-sm font-bold text-foreground">
+                กระดานข่าว
+              </h3>
+            </div>
+            <Link
+              href="/board"
+              className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            >
+              ดูทั้งหมด
+            </Link>
+          </div>
+
+          <div className="space-y-2">
+            <textarea
+              value={postText}
+              onChange={(event) => setPostText(event.target.value)}
+              placeholder="วันนี้มากี่คน มีอะไรอัปเดตบ้าง..."
+              rows={2}
+              className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+
+            {postPhotoFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {postPhotoFiles.map((file, index) => (
+                  <span
+                    key={`${file.name}-${index}`}
+                    className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground"
+                  >
+                    {file.name}
+                    <button
+                      type="button"
+                      onClick={() => removePostPhotoFile(index)}
+                      aria-label={`ลบรูป ${file.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2">
+              <input
+                ref={postFileInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => addPostPhotoFiles(event.target.files)}
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => postFileInputRef.current?.click()}
+                disabled={postPhotoFiles.length >= MAX_POST_PHOTOS}
+                className="h-9 rounded-xl text-xs font-bold"
+              >
+                <ImagePlus className="h-3.5 w-3.5" />
+                แนบรูป
+              </Button>
+              <Button
+                type="button"
+                onClick={submitPost}
+                disabled={
+                  isPosting || (!postText.trim() && postPhotoFiles.length === 0)
+                }
+                className="h-9 rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
+              >
+                {isPosting ? 'กำลังโพสต์...' : 'โพสต์'}
+              </Button>
+            </div>
+          </div>
+
+          {recentPosts.length > 0 && (
+            <div className="mt-4 space-y-2 border-t border-border/60 pt-3">
+              {recentPosts.map((post) => (
+                <div
+                  key={post.id}
+                  className="flex items-start justify-between gap-2 rounded-xl bg-muted/40 p-2.5 text-xs"
+                >
+                  <div className="min-w-0 flex-1">
+                    {post.text && (
+                      <p className="truncate text-foreground">{post.text}</p>
+                    )}
+                    {post.photoUrls.length > 0 && (
+                      <p className="text-muted-foreground">
+                        📷 {post.photoUrls.length} รูป
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removePost(post.id)}
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
+                    aria-label="ลบโพสต์"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </section>

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.0 (2026-09-06)
+
+- **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพจากหน้า dashboard, feed สาธารณะที่ `/board` ไม่ต้องมี PIN
+- รูปอัปโหลดตรงจากเบราว์เซอร์ไปที่ **Vercel Blob** (เลี่ยง serverless request body size limit ที่รูปมือถือมักเกิน) — `POST /api/posts/upload` ทำหน้าที่ออก client token ตามรูปแบบที่ Vercel แนะนำ
+- Endpoint ใหม่: `GET/POST /api/posts` (list แบบ cursor pagination + สร้างโพสต์), `DELETE /api/posts/:postId`
+- ปิด Phase 1 อย่างเป็นทางการ: ตัดสินใจไม่ทำ auto-trigger ปิดคอร์ดตามเวลาจองจริง ใช้ manual ล้วนต่อไป
+- **แก้ปัญหาสำคัญ**: local `.env` เผลอชี้ไปที่ MongoDB Atlas จริง (ค้างจากตอน debug deploy) ทำให้การทดสอบไปกระทบ database จริงที่ deploy ใช้งานอยู่ — ล้าง Atlas ให้สะอาดแล้ว (ยืนยันจากผู้ใช้ก่อนลบ) และย้าย local `.env` กลับไปใช้ container mongo ในเครื่องแทน เพิ่มคำเตือนไว้ใน README/decision-log กันเกิดซ้ำ
+
 ## v0.7.0 (2026-09-06)
 
 - **เช็คอิน 2 ขั้น + ลงชื่อ/เช็คอินด้วยตัวเองผ่าน QR** — เพิ่มสถานะผู้เล่น `registered` (ลงชื่อล่วงหน้า) แยกจาก `checked_in` (ยืนยันถึงคอร์ดแล้ว) คนที่ยังไม่เช็คอินจะไม่ถูกเอาไปสุ่ม (บังคับทั้งฝั่ง client และ server)

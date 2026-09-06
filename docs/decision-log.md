@@ -6,6 +6,22 @@
 
 ---
 
+## ADR-012 — Local `.env` ต้องชี้ local Docker mongo เสมอ ไม่ใช้ Atlas จริงตอน dev
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** ระหว่างแก้ปัญหา deploy Vercel + Atlas ก่อนหน้านี้ local `.env` ถูกแก้ให้ชี้ไปที่ Atlas cluster จริง (แทนที่ container local) เพื่อ debug — แต่ไม่มีใครสังเกตว่ายังชี้ค้างอยู่แบบนั้น ทำให้การทดสอบ Phase 2/3 ในเซสชันถัดมา (สร้าง session ทดสอบ, ลบ/ล้างข้อมูลด้วย `dropDatabase()` ระหว่างเทส) ไปกระทบ **database จริงที่ deploy ใช้งานอยู่** โดยไม่ได้ตั้งใจ จนไปเจอเข้าตอนทดสอบ webboard (โพสต์เก่าที่ลบไปแล้วจาก session ก่อนหน้ายังโผล่มา เพราะ dropDatabase ที่รันไปนั้น ๆ ไปโดน local container เปล่า ๆ ไม่ใช่ตัวจริงที่แอปต่ออยู่) เมื่อตรวจสอบพบว่ามีข้อมูลจริงของผู้ใช้ปนอยู่ด้วย (ผู้เล่นชื่อ "หมู" ที่ไม่ใช่ชื่อทดสอบ) ผู้ใช้ยืนยันให้ล้าง database Atlas ทั้งหมดทิ้ง (ไม่มีข้อมูลสำคัญอยู่ ณ ตอนนั้น)
+- **Decision:** local `.env` ต้องชี้ไปที่ container mongo local (`localhost:27017`) เสมอสำหรับ dev/ทดสอบ — ค่า connection string ของ Atlas จริงเก็บไว้ที่ Vercel Environment Variables เท่านั้น ไม่เอามาใส่ใน `.env` ของเครื่อง dev
+- **Consequences:** ก่อนรันคำสั่งที่ทำลายข้อมูล (`dropDatabase()`, `db:xxx` ทดสอบ) ทุกครั้งควร `cat .env` เช็คว่า `MONGODB_URI` ยังชี้ `localhost` อยู่ก่อนเสมอ — เพิ่มไว้ใน README ส่วน Troubleshooting ด้วย
+
+## ADR-011 — เลือก Vercel Blob เป็น file storage สำหรับ Phase 3 (webboard)
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** Phase 3 (webboard) ต้องเก็บรูปภาพที่แนบมากับโพสต์ ตัวเลือกที่เคยร่างไว้คือ Vercel Blob / Cloudinary / S3
+- **Decision:** เลือก Vercel Blob เพราะโปรเจกต์ deploy บน Vercel อยู่แล้ว ไม่ต้องสมัครบัญชีที่สามเพิ่ม ผูกกับ project ได้ตรง ๆ ผ่าน dashboard
+- **Consequences:** ต้อง enable Blob storage ในโปรเจกต์ Vercel (Storage tab) แล้วจะได้ `BLOB_READ_WRITE_TOKEN` มาตั้งเป็น env var อัตโนมัติบน Vercel — สำหรับ local dev ต้องคัดลอก token นั้นมาใส่ `.env` เองถ้าอยากทดสอบอัปโหลดรูปจริงในเครื่อง (ยังไม่ได้ทำในเซสชันนี้ ทดสอบได้แค่ path โพสต์ข้อความล้วน) ใช้ client-side direct upload (`@vercel/blob/client`) แทนที่จะอัปโหลดผ่าน server เพื่อเลี่ยง serverless request body size limit
+
 ## ADR-010 — ไม่ทำ auto-trigger ปิดคอร์ดตามเวลาจองจริง เก็บไว้แค่ manual
 
 - **วันที่:** 2026-09-06
