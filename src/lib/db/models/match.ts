@@ -22,7 +22,7 @@ const matchSchema = new Schema({
   scoreB: { type: Number, required: true, default: 0, min: 0 },
   // snapshot จาก session.targetScore ตอนสร้างแมตช์ (เหมือน mode) — เปลี่ยน
   // session.targetScore ทีหลังจะไม่กระทบแมตช์ที่สร้างไปแล้ว
-  targetScore: { type: Number, required: true, default: 21, min: 1, max: 99 },
+  targetScore: { type: Number, required: true, default: 11, min: 1, max: 99 },
 });
 
 matchSchema.index({ sessionId: 1, status: 1 });

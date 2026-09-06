@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Icon } from '@iconify/react';
 import {
+  ChevronRight,
   HelpCircle,
-  ImagePlus,
+  LogOut,
   Newspaper,
-  RefreshCw,
-  Trash2,
+  Plus,
+  Share2,
   Tv,
   X,
 } from 'lucide-react';
@@ -27,6 +28,12 @@ import { TargetScoreSelector } from '@/components/TargetScoreSelector';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
+import {
+  buildMatchesFromPlayers,
+  getPlayersPerMatch,
+  rankCandidates,
+  type SessionPlan,
+} from '@/lib/matching';
 import { cn } from '@/lib/utils';
 import {
   ApiError,
@@ -39,6 +46,7 @@ import {
   getPartnerHistory,
   getSession,
   listMatches,
+  listSessions,
   listSessionPlayers,
   renamePlayer,
   resetSessionStats,
@@ -52,22 +60,14 @@ import {
   type ApiSession,
   type ApiSessionPlayer,
 } from '@/lib/api/sessionApi';
-import {
-  createPost,
-  deletePost,
-  listPosts,
-  uploadPostPhoto,
-  type ApiPost,
-} from '@/lib/api/postsApi';
 
 const SESSION_STORAGE_KEY = 'bm_session_id';
 const MAX_COURTS = 3;
 const PIN_PATTERN = /^\d{4,6}$/;
 
-type SessionPlan = { mode: Mode; courtIds: number[] };
 // The plan editor also lets the admin adjust targetScore for future
 // rounds — kept separate from SessionPlan since the pure matching
-// algorithm below only ever needs mode/courtIds.
+// algorithm only ever needs mode/courtIds.
 type PlanDraft = SessionPlan & { targetScore: number };
 
 type PendingSubstitute = {
@@ -94,16 +94,20 @@ const getCourtIds = (count: number) => {
   return Array.from({ length: count }, (_, index) => index + 1);
 };
 
-const getPlayersPerMatch = (sourceMode: Mode) => {
-  return sourceMode === 'singles' ? 2 : 4;
-};
-
 const formatModeLabel = (sourceMode: Mode) => {
   return sourceMode === 'singles' ? 'Singles (1v1)' : 'Doubles (2v2)';
 };
 
 const formatCourtLabel = (courtIds: number[]) => {
   return courtIds.map((courtId) => `Court ${courtId}`).join(', ');
+};
+
+const formatSessionDate = (iso: string | null | undefined) => {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('th-TH', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
 };
 
 const toLocalPlayer = (sessionPlayer: ApiSessionPlayer): Player => ({
@@ -126,97 +130,6 @@ const getErrorMessage = (error: unknown) => {
   return 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง';
 };
 
-// ---- pure matching algorithm (unchanged from Phase 1, just no longer reads component state via closure) ----
-
-const shufflePlayers = (sourcePlayers: Player[]) => {
-  const output = [...sourcePlayers];
-  for (let i = output.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [output[i], output[j]] = [output[j], output[i]];
-  }
-  return output;
-};
-
-const rankCandidates = (sourcePlayers: Player[]) => {
-  return shufflePlayers(sourcePlayers).sort((a, b) => {
-    if (a.matches !== b.matches) return a.matches - b.matches;
-    return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);
-  });
-};
-
-const getPairKey = (idA: string, idB: string) => [idA, idB].sort().join('_');
-
-const DOUBLES_PARTNER_COMBOS: [[number, number], [number, number]][] = [
-  [
-    [0, 1],
-    [2, 3],
-  ],
-  [
-    [0, 2],
-    [1, 3],
-  ],
-  [
-    [0, 3],
-    [1, 2],
-  ],
-];
-
-const assignTeams = (slice: Player[], history: Record<string, number>) => {
-  const half = slice.length / 2;
-
-  if (slice.length !== 4) {
-    return { teamA: slice.slice(0, half), teamB: slice.slice(half) };
-  }
-
-  const options = DOUBLES_PARTNER_COMBOS.map(([teamAIdx, teamBIdx]) => {
-    const teamA = teamAIdx.map((i) => slice[i]);
-    const teamB = teamBIdx.map((i) => slice[i]);
-    const score =
-      (history[getPairKey(teamA[0].id, teamA[1].id)] ?? 0) +
-      (history[getPairKey(teamB[0].id, teamB[1].id)] ?? 0);
-
-    return { teamA, teamB, score };
-  });
-
-  const lowestScore = Math.min(...options.map((option) => option.score));
-  const bestOptions = options.filter((option) => option.score === lowestScore);
-  const picked = bestOptions[Math.floor(Math.random() * bestOptions.length)];
-
-  return { teamA: picked.teamA, teamB: picked.teamB };
-};
-
-const buildMatchesFromPlayers = (
-  sourcePlayers: Player[],
-  blockedIds: Set<string>,
-  plan: SessionPlan,
-  history: Record<string, number>,
-) => {
-  const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
-  const availablePlayers = sourcePlayers.filter(
-    (player) => !blockedIds.has(player.id),
-  );
-  const pool = rankCandidates(availablePlayers);
-
-  const newMatches: Match[] = [];
-  const used = new Set<string>();
-
-  for (const courtId of plan.courtIds) {
-    const slice = pool
-      .filter((player) => !used.has(player.id))
-      .slice(0, planPlayersPerMatch);
-    if (slice.length < planPlayersPerMatch) {
-      break;
-    }
-
-    slice.forEach((player) => used.add(player.id));
-
-    const { teamA, teamB } = assignTeams(slice, history);
-    newMatches.push({ court: courtId, mode: plan.mode, teamA, teamB, status: 'ready' });
-  }
-
-  return { newMatches, used };
-};
-
 export function HomePage() {
   // ---- session bootstrap ----
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -226,11 +139,18 @@ export function HomePage() {
   const [origin, setOrigin] = useState('');
 
   // ---- create-session form ----
-  const [createMode, setCreateMode] = useState<Mode>('doubles');
-  const [createCourts, setCreateCourts] = useState(1);
-  const [createTargetScore, setCreateTargetScore] = useState(21);
+  // Mode/court count/target score are no longer chosen at creation time —
+  // create with sensible defaults, then adjust via the dashboard's
+  // pre-game section before the first "เริ่มจับคู่" (which already
+  // supports changing all three before any match exists).
+  const [createName, setCreateName] = useState('');
   const [createPin, setCreatePin] = useState('');
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+
+  // ---- existing-session history (shown on the create screen) ----
+  const [existingSessions, setExistingSessions] = useState<ApiSession[]>([]);
+  const [historyPage, setHistoryPage] = useState(0);
 
   // ---- pin gate ----
   const [pinInput, setPinInput] = useState('');
@@ -247,17 +167,10 @@ export function HomePage() {
   );
   const [nextMatches, setNextMatches] = useState<Match[]>([]);
 
-  // ---- webboard (Phase 3) ----
-  const [recentPosts, setRecentPosts] = useState<ApiPost[]>([]);
-  const [postText, setPostText] = useState('');
-  const [postPhotoFiles, setPostPhotoFiles] = useState<File[]>([]);
-  const [isPosting, setIsPosting] = useState(false);
-  const postFileInputRef = useRef<HTMLInputElement>(null);
-
   // ---- pre-game draft (only used while there are no active matches yet) ----
   const [draftMode, setDraftMode] = useState<Mode>('doubles');
   const [draftCourts, setDraftCourts] = useState(1);
-  const [draftTargetScore, setDraftTargetScore] = useState(21);
+  const [draftTargetScore, setDraftTargetScore] = useState(11);
 
   // ---- misc UI state (same shape as before) ----
   const [managePlayerDraft, setManagePlayerDraft] =
@@ -331,6 +244,23 @@ export function HomePage() {
     };
   }, []);
 
+  // ---- fetch the "pick an existing session" list for the create screen ----
+  useEffect(() => {
+    if (view !== 'create') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const sessions = await listSessions();
+        if (!cancelled) setExistingSessions(sessions);
+      } catch {
+        // secondary feature — the create form still works without it
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
   const refreshAll = async (sid: string) => {
     try {
       const [rawPlayers, rawMatches, rawHistory, freshSession] =
@@ -375,20 +305,9 @@ export function HomePage() {
     }
   };
 
-  const refreshPosts = async () => {
-    try {
-      const { posts } = await listPosts();
-      setRecentPosts(posts.slice(0, 5));
-    } catch {
-      // webboard is a secondary feature — fail quietly, main dashboard
-      // still works without it
-    }
-  };
-
   useEffect(() => {
     if (sessionId && isAuthenticated) {
       refreshAll(sessionId);
-      refreshPosts();
     }
   }, [sessionId, isAuthenticated]);
 
@@ -468,19 +387,6 @@ export function HomePage() {
 
   const undoableCourtId = latestFinishedMatch?.court;
 
-  const currentSessionSummary = useMemo(() => {
-    if (activeMatches.length === 0) return undefined;
-
-    const courtIds = Array.from(
-      new Set(activeMatches.map((match) => match.court)),
-    ).sort((a, b) => a - b);
-    const modes = Array.from(new Set(activeMatches.map((match) => match.mode)));
-    const modeLabel =
-      modes.length === 1 ? formatModeLabel(modes[0]) : 'Mixed mode';
-
-    return `${formatCourtLabel(courtIds)} · ${modeLabel}`;
-  }, [activeMatches]);
-
   const stats = useMemo(() => {
     const playingCount = activeMatches
       .filter((match) => match.status === 'playing')
@@ -498,18 +404,32 @@ export function HomePage() {
     };
   }, [activeMatches, sessionPlayersRaw]);
 
+  const HISTORY_PAGE_SIZE = 8;
+  const HISTORY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+  // Session history only shows sessions created within the last day —
+  // older ones are almost certainly not what someone's looking for.
+  const recentSessions = useMemo(() => {
+    const cutoff = Date.now() - HISTORY_MAX_AGE_MS;
+    return existingSessions.filter(
+      (existing) =>
+        existing.createdAt && new Date(existing.createdAt).getTime() >= cutoff,
+    );
+  }, [existingSessions]);
+  const historyPageCount = Math.max(
+    1,
+    Math.ceil(recentSessions.length / HISTORY_PAGE_SIZE),
+  );
+  const historyPageClamped = Math.min(historyPage, historyPageCount - 1);
+  const historySessionsPage = recentSessions.slice(
+    historyPageClamped * HISTORY_PAGE_SIZE,
+    historyPageClamped * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE,
+  );
+
   const playersPerMatch = getPlayersPerMatch(draftMode);
   const checkinUrl = origin && sessionId ? `${origin}/checkin/${sessionId}` : '';
   const displayMode =
     activeMatches.length > 0 ? (session?.mode ?? draftMode) : draftMode;
-  const displayCourts =
-    activeMatches.length > 0
-      ? (session?.activeCourts.length ?? draftCourts)
-      : draftCourts;
-  const displayTargetScore =
-    activeMatches.length > 0
-      ? (session?.targetScore ?? draftTargetScore)
-      : draftTargetScore;
 
   // ---- session bootstrap actions ----
 
@@ -525,12 +445,13 @@ export function HomePage() {
 
     setIsCreatingSession(true);
     try {
-      const courtIds = getCourtIds(createCourts);
+      const name = createName.trim() || formatSessionDate(new Date().toISOString());
       const created = await createSession(
-        createMode,
+        'doubles',
         createPin,
-        courtIds,
-        createTargetScore,
+        [1],
+        11,
+        name,
       );
       window.localStorage.setItem(SESSION_STORAGE_KEY, created.id);
       setSessionId(created.id);
@@ -540,6 +461,8 @@ export function HomePage() {
       setDraftCourts(created.activeCourts.length);
       setDraftTargetScore(created.targetScore);
       setCreatePin('');
+      setCreateName('');
+      setIsCreateModalOpen(false);
     } catch (error) {
       showSnackbar({
         title: 'สร้าง session ไม่สำเร็จ',
@@ -549,6 +472,19 @@ export function HomePage() {
     } finally {
       setIsCreatingSession(false);
     }
+  };
+
+  /** Enters the PIN gate for a session picked from the "existing sessions"
+   * list on the create screen (mirrors what the localStorage-bootstrap
+   * effect does — remembers the choice on this device, but still requires
+   * the PIN before granting access). */
+  const pickExistingSession = (picked: ApiSession) => {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, picked.id);
+    setSessionId(picked.id);
+    setSession(picked);
+    setDraftMode(picked.mode);
+    setDraftCourts(picked.activeCourts.length);
+    setDraftTargetScore(picked.targetScore);
   };
 
   const handleVerifyPin = async () => {
@@ -1032,6 +968,70 @@ export function HomePage() {
         activeCourts: planDraft.courtIds,
         targetScore: planDraft.targetScore,
       });
+
+      // A court newly added to the plan has no live match yet — nothing
+      // else ever creates one for it (only finishMatch's auto-refill does,
+      // and only for a court that already had a match), so it would just
+      // sit forever as an empty "next match" preview unless we create one
+      // for it right here.
+      const existingActiveCourts = new Set(
+        activeMatches.map((match) => match.court),
+      );
+      const emptyCourtIds = planDraft.courtIds.filter(
+        (courtId) => !existingActiveCourts.has(courtId),
+      );
+
+      if (emptyCourtIds.length > 0) {
+        const [freshPlayers, freshMatches, freshHistoryList] =
+          await Promise.all([
+            listSessionPlayers(sessionId),
+            listMatches(sessionId),
+            getPartnerHistory(sessionId),
+          ]);
+        const freshHistory = Object.fromEntries(
+          freshHistoryList.map((entry) => [
+            entry.pairKey,
+            entry.timesPlayedTogether,
+          ]),
+        );
+        const activeIds = new Set(
+          freshMatches
+            .filter((match) => match.status !== 'done')
+            .flatMap((match) => [...match.teamA, ...match.teamB]),
+        );
+        const localPlayers = toEligiblePlayers(freshPlayers);
+        const emptyCourtsPlan: SessionPlan = {
+          mode: planDraft.mode,
+          courtIds: emptyCourtIds,
+        };
+        const { newMatches } = buildMatchesFromPlayers(
+          localPlayers,
+          activeIds,
+          emptyCourtsPlan,
+          freshHistory,
+        );
+
+        for (const match of newMatches) {
+          await createMatch(sessionId, {
+            court: match.court,
+            mode: match.mode,
+            teamAIds: match.teamA.map((player) => player.id),
+            teamBIds: match.teamB.map((player) => player.id),
+          });
+        }
+
+        if (newMatches.length < emptyCourtIds.length) {
+          await refreshAll(sessionId);
+          setPlanDraft(null);
+          showSnackbar({
+            title: `เปลี่ยนแผนแล้ว แต่จับคู่ได้แค่คอร์ดใหม่ ${newMatches.length}/${emptyCourtIds.length}`,
+            description: 'ผู้เล่นที่ว่างไม่พอสำหรับคอร์ดใหม่ทั้งหมด',
+            variant: 'info',
+          });
+          return;
+        }
+      }
+
       await refreshAll(sessionId);
       setPlanDraft(null);
       showSnackbar({
@@ -1168,69 +1168,6 @@ export function HomePage() {
     setIsClearAllConfirmOpen(false);
   };
 
-  // ---- webboard ----
-
-  const MAX_POST_PHOTOS = 6;
-
-  const addPostPhotoFiles = (files: FileList | null) => {
-    if (!files) return;
-    setPostPhotoFiles((prev) =>
-      [...prev, ...Array.from(files)].slice(0, MAX_POST_PHOTOS),
-    );
-    if (postFileInputRef.current) postFileInputRef.current.value = '';
-  };
-
-  const removePostPhotoFile = (index: number) => {
-    setPostPhotoFiles((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const submitPost = async () => {
-    const trimmed = postText.trim();
-    if (!trimmed && postPhotoFiles.length === 0) return;
-
-    setIsPosting(true);
-    try {
-      const photoUrls = await Promise.all(
-        postPhotoFiles.map((file) => uploadPostPhoto(file)),
-      );
-      await createPost({
-        text: trimmed,
-        photoUrls,
-        sessionId: sessionId ?? undefined,
-      });
-      setPostText('');
-      setPostPhotoFiles([]);
-      await refreshPosts();
-      showSnackbar({
-        title: 'โพสต์แล้ว',
-        description: 'ขึ้นกระดานข่าวเรียบร้อย',
-        variant: 'success',
-      });
-    } catch (error) {
-      showSnackbar({
-        title: 'โพสต์ไม่สำเร็จ',
-        description: getErrorMessage(error),
-        variant: 'error',
-      });
-    } finally {
-      setIsPosting(false);
-    }
-  };
-
-  const removePost = async (postId: string) => {
-    try {
-      await deletePost(postId);
-      await refreshPosts();
-      toast.success('ลบโพสต์แล้ว');
-    } catch (error) {
-      showSnackbar({
-        title: 'ลบโพสต์ไม่สำเร็จ',
-        description: getErrorMessage(error),
-        variant: 'error',
-      });
-    }
-  };
-
   const managedPlayer = managePlayerDraft
     ? players.find((player) => player.id === managePlayerDraft.sessionPlayerId)
     : null;
@@ -1259,85 +1196,209 @@ export function HomePage() {
 
   if (view === 'create') {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-gradient-surface px-4">
-        <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-soft">
-          <div className="mb-5 flex items-center justify-between gap-2.5">
+      <div className="min-h-dvh bg-gradient-surface pb-24">
+        {isCreateModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+              <div className="mb-1 flex items-center justify-between">
+                <h3 className="font-display text-lg font-extrabold text-foreground">
+                  สร้าง session ใหม่
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsCreateModalOpen(false)}
+                  aria-label="ปิด"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="mt-4 space-y-5">
+                <div className="space-y-2">
+                  <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    ตั้งชื่อ session (ไม่บังคับ)
+                  </p>
+                  <Input
+                    value={createName}
+                    onChange={(event) =>
+                      setCreateName(event.target.value.slice(0, 60))
+                    }
+                    placeholder="ไม่ตั้งจะใช้วันที่แทน เช่น ซ้อมวันจันทร์"
+                    className="h-11 rounded-xl"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    ตั้ง PIN สำหรับแอดมิน (4-6 หลัก)
+                  </p>
+                  <Input
+                    value={createPin}
+                    onChange={(event) =>
+                      setCreatePin(
+                        event.target.value.replace(/\D/g, '').slice(0, 6),
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        handleCreateSession();
+                      }
+                    }}
+                    inputMode="numeric"
+                    placeholder="เช่น 1234"
+                    className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    ใครมี PIN นี้จะจับคู่/จบแมตช์/ปิดคอร์ดได้ เก็บไว้ให้ทีมงานเท่านั้น
+                  </p>
+                </div>
+
+                <Button
+                  type="button"
+                  data-testid="submit-create-session"
+                  onClick={handleCreateSession}
+                  disabled={isCreatingSession}
+                  className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
+                >
+                  {isCreatingSession ? 'กำลังสร้าง...' : 'สร้าง session'}
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">
+                  เลือกรูปแบบการแข่งขัน/จำนวนคอร์ด/คะแนนเป้าหมายได้ทีหลัง ก่อนเริ่มจับคู่ครั้งแรก
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <header className="sticky top-0 z-30 border-b border-border/60 bg-background/90 backdrop-blur-lg">
+          <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
             <div className="flex items-center gap-2.5">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
                 <Icon
                   icon="mdi:badminton"
                   width="20"
                   height="20"
-                  className="text-primary"
+                  className="animate-shuttle text-primary"
                 />
               </div>
               <div>
-                <h1 className="font-display text-base font-extrabold text-foreground">
+                <h1 className="font-display text-base font-extrabold leading-tight text-foreground">
                   Badminton Matcher
                 </h1>
-                <p className="text-xs text-muted-foreground">สร้าง session ใหม่</p>
+                <p className="font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                  Fair · Fast · Fun · {APP_VERSION}
+                </p>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <Link
                 href="/board"
                 className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-                aria-label="กระดานข่าว"
               >
                 <Newspaper className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">กระดานข่าว</span>
               </Link>
               <Link
                 href="/how-to-use"
                 className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
               >
                 <HelpCircle className="h-3.5 w-3.5" />
-                วิธีใช้งาน
+                <span className="hidden sm:inline">วิธีใช้งาน</span>
               </Link>
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(true)}
+                className="flex items-center gap-1 rounded-full bg-primary px-2.5 py-1.5 font-display text-xs font-bold text-primary-foreground transition-smooth hover:bg-primary/90"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">สร้าง session</span>
+              </button>
             </div>
           </div>
+        </header>
 
-          <div className="space-y-5">
-            <ModeSelector value={createMode} onChange={setCreateMode} />
-            <CourtSelector value={createCourts} onChange={setCreateCourts} />
-            <TargetScoreSelector
-              value={createTargetScore}
-              onChange={setCreateTargetScore}
-            />
+        <main className="mx-auto w-full max-w-3xl px-3 py-4 sm:px-6 sm:py-8">
+          <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+            <h2 className="mb-4 font-display text-base font-extrabold text-foreground">
+              Session ล่าสุด
+            </h2>
 
-            <div className="space-y-2">
-              <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                ตั้ง PIN สำหรับแอดมิน (4-6 หลัก)
+            {recentSessions.length === 0 ? (
+              <p className="rounded-xl border border-dashed border-border bg-muted/40 py-8 text-center text-xs font-medium text-muted-foreground">
+                ยังไม่มี session ที่สร้างภายใน 1 วันที่ผ่านมา — กด &quot;สร้าง
+                session&quot; มุมขวาบนเพื่อเริ่มสร้างใหม่
               </p>
-              <Input
-                value={createPin}
-                onChange={(event) =>
-                  setCreatePin(event.target.value.replace(/\D/g, '').slice(0, 6))
-                }
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    handleCreateSession();
-                  }
-                }}
-                inputMode="numeric"
-                placeholder="เช่น 1234"
-                className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
-              />
-              <p className="text-xs text-muted-foreground">
-                ใครมี PIN นี้จะจับคู่/จบแมตช์/ปิดคอร์ดได้ เก็บไว้ให้ทีมงานเท่านั้น
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                  {historySessionsPage.map((existing) => (
+                    <button
+                      key={existing.id}
+                      type="button"
+                      onClick={() => pickExistingSession(existing)}
+                      className="flex aspect-square flex-col items-center justify-center gap-1.5 rounded-2xl border border-border bg-muted/40 p-3 text-center transition-smooth hover:bg-muted"
+                    >
+                      <p className="line-clamp-2 font-display text-xs font-bold text-foreground">
+                        {existing.name || formatSessionDate(existing.createdAt)}
+                      </p>
+                      <p className="font-display text-[10px] font-semibold text-muted-foreground">
+                        {existing.mode === 'singles' ? '1v1' : '2v2'} ·{' '}
+                        {existing.activeCourts.length} คอร์ด
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {formatSessionDate(existing.createdAt)}
+                        {existing.status === 'closed' ? ' · ปิดแล้ว' : ''}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+
+                {historyPageCount > 1 && (
+                  <div className="mt-4 flex items-center justify-between">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={historyPageClamped === 0}
+                      onClick={() => setHistoryPage((page) => page - 1)}
+                      className="h-8 rounded-full px-3 font-display text-xs font-bold"
+                    >
+                      ก่อนหน้า
+                    </Button>
+                    <span className="font-display text-[11px] font-medium text-muted-foreground">
+                      หน้า {historyPageClamped + 1}/{historyPageCount}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={historyPageClamped >= historyPageCount - 1}
+                      onClick={() => setHistoryPage((page) => page + 1)}
+                      className="h-8 rounded-full px-3 font-display text-xs font-bold"
+                    >
+                      ถัดไป
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </main>
+
+        <footer className="fixed inset-x-0 bottom-0 z-20 border-t border-border/50 bg-background/80 backdrop-blur-xl">
+          <div className="mx-auto w-full max-w-md px-4 py-3 pb-4">
+            <div className="flex flex-col items-center gap-3">
+              <p className="text-xs font-medium text-muted-foreground">
+                <span>Powered by</span>
+                <span className="ml-1 font-display font-bold text-foreground">
+                  MiraLabs.Dev
+                </span>
               </p>
             </div>
-
-            <Button
-              type="button"
-              onClick={handleCreateSession}
-              disabled={isCreatingSession}
-              className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
-            >
-              {isCreatingSession ? 'กำลังสร้าง...' : 'สร้าง session'}
-            </Button>
           </div>
-        </div>
+        </footer>
       </div>
     );
   }
@@ -1349,8 +1410,13 @@ export function HomePage() {
           <h1 className="font-display text-lg font-extrabold text-foreground">
             ใส่ PIN เพื่อเข้าใช้งาน
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {session ? `${formatModeLabel(session.mode)} · สร้างไว้ก่อนหน้านี้` : ''}
+          <p className="mt-1 text-sm font-semibold text-foreground">
+            {session?.name}
+          </p>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {session
+              ? `${formatModeLabel(session.mode)} · ${formatSessionDate(session.createdAt)}`
+              : ''}
           </p>
 
           <div className="mt-5 space-y-2">
@@ -1652,11 +1718,13 @@ export function HomePage() {
               />
             </div>
             <div>
-              <h1 className="font-display text-base font-extrabold leading-tight text-foreground">
-                Badminton Matcher
+              <h1 className="truncate font-display text-base font-extrabold leading-tight text-foreground">
+                {session?.name || 'Badminton Matcher'}
               </h1>
-              <p className="font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                Fair · Fast · Fun · {APP_VERSION}
+              <p className="truncate font-display text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {session
+                  ? formatSessionDate(session.createdAt)
+                  : `Fair · Fast · Fun · ${APP_VERSION}`}
               </p>
             </div>
           </div>
@@ -1672,17 +1740,119 @@ export function HomePage() {
               </Link>
             )}
             <Link
+              href="/board"
+              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+            >
+              <Newspaper className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">กระดานข่าว</span>
+            </Link>
+            <Link
               href="/how-to-use"
               className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
             >
               <HelpCircle className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">วิธีใช้งาน</span>
             </Link>
+            <button
+              type="button"
+              onClick={requestClearAll}
+              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">ออกจาก session</span>
+            </button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8">
+        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <div className="mb-2 flex items-center gap-2">
+            <Icon icon="mdi:qrcode" width="16" height="16" className="text-muted-foreground" />
+            <h3 className="font-display text-sm font-bold text-foreground">
+              ลิงก์ลงชื่อ/เช็คอินด้วยตัวเอง
+            </h3>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground">
+            ให้ผู้เล่นสแกน QR หรือเปิดลิงก์นี้เพื่อลงชื่อล่วงหน้าหรือเช็คอินเองได้ ไม่ต้องมี PIN
+          </p>
+          {checkinUrl && (
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+              <QrCode
+                value={checkinUrl}
+                size={140}
+                className="rounded-xl border border-border"
+              />
+              <div className="flex w-full flex-1 flex-col gap-2">
+                <Input
+                  readOnly
+                  value={checkinUrl}
+                  onFocus={(event) => event.currentTarget.select()}
+                  className="h-11 rounded-xl text-xs"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(checkinUrl);
+                        toast.success('คัดลอกลิงก์แล้ว');
+                      } catch {
+                        toast.error('คัดลอกไม่สำเร็จ');
+                      }
+                    }}
+                    className="h-11 flex-1 rounded-xl text-xs font-bold"
+                  >
+                    คัดลอกลิงก์
+                  </Button>
+                  {typeof navigator !== 'undefined' && 'share' in navigator && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          await navigator.share({
+                            title: 'ลงชื่อ/เช็คอิน Badminton Matcher',
+                            url: checkinUrl,
+                          });
+                        } catch {
+                          // ผู้ใช้กดยกเลิก share sheet เอง — ไม่ต้องแจ้ง error
+                        }
+                      }}
+                      className="h-11 shrink-0 rounded-xl px-3 text-xs font-bold"
+                      aria-label="แชร์ลิงก์"
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      แชร์
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+
+        {activeMatches.length === 0 && (
+          <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+            <div className="space-y-5">
+              <p className="text-xs font-medium text-muted-foreground">
+                เพิ่มผู้เล่นให้พอสำหรับ 1 แมตช์ก่อน แล้วค่อยเลือก Singles/Doubles
+                กับจำนวนคอร์ด
+              </p>
+              <ModeSelector value={draftMode} onChange={handleModeChange} />
+              <CourtSelector
+                value={draftCourts}
+                onChange={handleCourtCountChange}
+              />
+              <TargetScoreSelector
+                value={draftTargetScore}
+                onChange={setDraftTargetScore}
+              />
+            </div>
+          </section>
+        )}
+
         <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
           <PlayerList
             players={players}
@@ -1722,207 +1892,16 @@ export function HomePage() {
           </section>
         )}
 
-        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
-          <div className="mb-2 flex items-center gap-2">
-            <Icon icon="mdi:qrcode" width="16" height="16" className="text-muted-foreground" />
-            <h3 className="font-display text-sm font-bold text-foreground">
-              ลิงก์ลงชื่อ/เช็คอินด้วยตัวเอง
-            </h3>
-          </div>
-          <p className="mb-3 text-xs text-muted-foreground">
-            ให้ผู้เล่นสแกน QR หรือเปิดลิงก์นี้เพื่อลงชื่อล่วงหน้าหรือเช็คอินเองได้ ไม่ต้องมี PIN
-          </p>
-          {checkinUrl && (
-            <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
-              <QrCode
-                value={checkinUrl}
-                size={140}
-                className="rounded-xl border border-border"
-              />
-              <div className="flex w-full flex-1 flex-col gap-2">
-                <Input
-                  readOnly
-                  value={checkinUrl}
-                  onFocus={(event) => event.currentTarget.select()}
-                  className="h-11 rounded-xl text-xs"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(checkinUrl);
-                      toast.success('คัดลอกลิงก์แล้ว');
-                    } catch {
-                      toast.error('คัดลอกไม่สำเร็จ');
-                    }
-                  }}
-                  className="h-11 rounded-xl text-xs font-bold"
-                >
-                  คัดลอกลิงก์
-                </Button>
-              </div>
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Newspaper className="h-4 w-4 text-muted-foreground" />
-              <h3 className="font-display text-sm font-bold text-foreground">
-                กระดานข่าว
-              </h3>
-            </div>
-            <Link
-              href="/board"
-              className="text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground"
-            >
-              ดูทั้งหมด
-            </Link>
-          </div>
-
-          <div className="space-y-2">
-            <textarea
-              value={postText}
-              onChange={(event) => setPostText(event.target.value)}
-              placeholder="วันนี้มากี่คน มีอะไรอัปเดตบ้าง..."
-              rows={2}
-              className="w-full resize-none rounded-xl border border-border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            />
-
-            {postPhotoFiles.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {postPhotoFiles.map((file, index) => (
-                  <span
-                    key={`${file.name}-${index}`}
-                    className="flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground"
-                  >
-                    {file.name}
-                    <button
-                      type="button"
-                      onClick={() => removePostPhotoFile(index)}
-                      aria-label={`ลบรูป ${file.name}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <div className="flex items-center justify-between gap-2">
-              <input
-                ref={postFileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(event) => addPostPhotoFiles(event.target.files)}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => postFileInputRef.current?.click()}
-                disabled={postPhotoFiles.length >= MAX_POST_PHOTOS}
-                className="h-9 rounded-xl text-xs font-bold"
-              >
-                <ImagePlus className="h-3.5 w-3.5" />
-                แนบรูป
-              </Button>
-              <Button
-                type="button"
-                onClick={submitPost}
-                disabled={
-                  isPosting || (!postText.trim() && postPhotoFiles.length === 0)
-                }
-                className="h-9 rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
-              >
-                {isPosting ? 'กำลังโพสต์...' : 'โพสต์'}
-              </Button>
-            </div>
-          </div>
-
-          {recentPosts.length > 0 && (
-            <div className="mt-4 space-y-2 border-t border-border/60 pt-3">
-              {recentPosts.map((post) => (
-                <div
-                  key={post.id}
-                  className="flex items-start justify-between gap-2 rounded-xl bg-muted/40 p-2.5 text-xs"
-                >
-                  <div className="min-w-0 flex-1">
-                    {post.text && (
-                      <p className="truncate text-foreground">{post.text}</p>
-                    )}
-                    {post.photoUrls.length > 0 && (
-                      <p className="text-muted-foreground">
-                        📷 {post.photoUrls.length} รูป
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removePost(post.id)}
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    aria-label="ลบโพสต์"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
-          <div className="space-y-5">
-            <p className="text-xs font-medium text-muted-foreground">
-              เพิ่มผู้เล่นให้พอสำหรับ 1 แมตช์ก่อน แล้วค่อยเลือก Singles/Doubles
-              กับจำนวนคอร์ด
-            </p>
-            <ModeSelector
-              value={displayMode}
-              onChange={handleModeChange}
-              disabled={activeMatches.length > 0}
-            />
-            <CourtSelector
-              value={displayCourts}
-              onChange={handleCourtCountChange}
-              disabled={activeMatches.length > 0}
-            />
-            <TargetScoreSelector
-              value={displayTargetScore}
-              onChange={setDraftTargetScore}
-              disabled={activeMatches.length > 0}
-            />
-            {activeMatches.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-xs font-medium text-muted-foreground">
-                  กำลังเล่นอยู่ ให้ใช้ปุ่ม “ปรับรอบถัดไป”
-                  เพื่อเปลี่ยนจำนวนคอร์ดหรือรูปแบบการแข่งขัน
-                </p>
-                <div className="rounded-xl border border-border/70 bg-muted/40 px-3 py-2 text-[11px]">
-                  <p className="font-display font-bold uppercase tracking-wide text-muted-foreground">
-                    เกมที่กำลังเล่น
-                  </p>
-                  <p className="mt-1 font-medium text-foreground">
-                    {currentSessionSummary ?? '-'}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <Button
-              type="button"
-              onClick={generateMatches}
-              disabled={players.length < playersPerMatch || activeMatches.length > 0}
-              className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
-            >
-              เริ่มจับคู่
-            </Button>
-          </div>
-        </section>
+        {activeMatches.length === 0 && (
+          <Button
+            type="button"
+            onClick={generateMatches}
+            disabled={players.length < playersPerMatch}
+            className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
+          >
+            เริ่มจับคู่
+          </Button>
+        )}
 
         {activeMatches.length > 0 && (
           <section className="rounded-3xl border border-border/70 bg-card p-4 sm:p-6">
@@ -1939,64 +1918,33 @@ export function HomePage() {
               undoableCourtId={undoableCourtId}
               onUndoCourtFinish={undoLatestFinishByCourt}
               onOpenPlanEditor={openPlanEditor}
+              onResetStats={resetStats}
             />
-            <div className="mt-4 rounded-2xl border border-border/60 bg-muted/35 px-3 py-2.5">
-              <div className="overflow-x-auto">
-                <div className="flex min-w-max items-center justify-between gap-4 text-[11px]">
-                  <div className="flex items-center gap-2 text-muted-foreground/90">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="font-medium text-muted-foreground/90">
-                        กำลังเล่น:
-                      </span>
-                      <span className="font-display font-bold text-foreground/90">
-                        {stats.playing}
-                      </span>
-                    </span>
-                    <span>|</span>
-                    <span className="inline-flex items-center gap-1">
-                      <span className="font-medium text-muted-foreground/90">
-                        พักอยู่:
-                      </span>
-                      <span className="font-display font-bold text-foreground/90">
-                        {stats.resting}
-                      </span>
-                    </span>
-                    <span>|</span>
-                    <span className="inline-flex items-center gap-1">
-                      <span className="font-medium text-muted-foreground/90">
-                        จบแล้ว:
-                      </span>
-                      <span className="font-display font-bold text-foreground/90">
-                        {totalFinishedMatches}
-                      </span>
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={resetStats}
-                      className="h-7 rounded-full px-2 font-display text-[10px] font-medium text-muted-foreground/85 hover:bg-background/60 hover:text-muted-foreground"
-                    >
-                      <RefreshCw className="h-3 w-3 opacity-70" />
-                      รีเซ็ตทั้งหมด
-                    </Button>
-
-                    {players.length > 0 && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={requestClearAll}
-                        className="h-7 rounded-full px-2 font-display text-[10px] font-medium text-muted-foreground/85 hover:bg-background/60 hover:text-destructive/80"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 opacity-70" />
-                        ล้างทั้งหมด
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[11px] text-muted-foreground/90">
+              <span className="inline-flex items-center gap-1">
+                <span className="font-medium text-muted-foreground/90">
+                  กำลังเล่น:
+                </span>
+                <span className="font-display font-bold text-foreground/90">
+                  {stats.playing}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="font-medium text-muted-foreground/90">
+                  พักอยู่:
+                </span>
+                <span className="font-display font-bold text-foreground/90">
+                  {stats.resting}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="font-medium text-muted-foreground/90">
+                  จบแล้ว:
+                </span>
+                <span className="font-display font-bold text-foreground/90">
+                  {totalFinishedMatches}
+                </span>
+              </span>
             </div>
           </section>
         )}

@@ -40,6 +40,7 @@ export const ModeSelector = ({
               size='sm'
               disabled={disabled}
               onClick={() => onChange(opt.value)}
+              data-testid={`mode-option-${opt.value}`}
               className={cn(
                 'relative h-auto rounded-full px-3.5 py-2 font-display text-xs font-bold transition-smooth',
                 active

@@ -2,8 +2,11 @@ export const MAX_COURT_NUMBER = 20;
 export const MIN_TARGET_SCORE = 1;
 export const MAX_TARGET_SCORE = 99;
 
+export const MAX_SESSION_NAME_LENGTH = 60;
+
 export const serializeSession = (session: {
   _id: { toString(): string };
+  name?: string | null;
   mode: string;
   status: string;
   activeCourts: number[];
@@ -11,6 +14,7 @@ export const serializeSession = (session: {
   createdAt?: Date;
 }) => ({
   id: session._id.toString(),
+  name: session.name ?? null,
   mode: session.mode,
   status: session.status,
   activeCourts: session.activeCourts,

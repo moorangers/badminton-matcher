@@ -6,6 +6,7 @@ import { SessionModel } from '@/lib/db/models/session';
 import {
   isValidActiveCourts,
   isValidTargetScore,
+  MAX_SESSION_NAME_LENGTH,
   serializeSession,
 } from '@/lib/db/services/sessions';
 
@@ -14,7 +15,9 @@ export async function POST(request: Request) {
   const mode = body?.mode;
   const pin = body?.pin;
   const activeCourts = body?.activeCourts ?? [1];
-  const targetScore = body?.targetScore ?? 21;
+  const targetScore = body?.targetScore ?? 11;
+  const nameRaw = typeof body?.name === 'string' ? body.name.trim() : '';
+  const name = nameRaw.slice(0, MAX_SESSION_NAME_LENGTH) || undefined;
 
   if (mode !== 'singles' && mode !== 'doubles') {
     return NextResponse.json(
@@ -47,6 +50,7 @@ export async function POST(request: Request) {
   await connectToDatabase();
   const adminPinHash = await hashPin(pin);
   const session = await SessionModel.create({
+    name,
     mode,
     adminPinHash,
     activeCourts: Array.from(new Set(activeCourts)).sort((a, b) => a - b),

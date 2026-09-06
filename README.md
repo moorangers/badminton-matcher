@@ -4,7 +4,7 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.9.1
+> Current Version: v0.9.20
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
@@ -44,7 +44,7 @@
 - **เพิ่มผู้เล่นระหว่างเกม** — คู่ถัดไปจะถูก regenerate ทันทีโดยผู้เล่นใหม่จะถูก prioritize เข้าสนามก่อน
 - **ลบผู้เล่นระหว่างเกม** — ถ้าผู้เล่นไม่ได้อยู่ใน active match จะลบได้ทันที และ regenerate คู่ถัดไป / ถ้าอยู่ใน active match จะเปิด flow เปลี่ยนตัวก่อน
 - **Substitute Player** — กดไอคอน `⇄` ที่ชื่อผู้เล่นใน court card ได้โดยตรง ระบบจะ confirm แล้วสุ่มคนพักมาแทนอัตโนมัติ ผู้เล่นเดิมจะ `ไปพัก` (ไม่ถูกลบจากรายชื่อ)
-- **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพจากหน้า dashboard (เช่น รายงานว่าวันนี้มากี่คน) รูปอัปโหลดตรงไปที่ Vercel Blob จากเบราว์เซอร์เลย ใครก็ดู feed ได้ที่หน้า `/board` โดยไม่ต้องมี PIN
+- **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพได้ที่หน้า `/board` (ลิงก์อยู่ในเมนูบนสุด, เช่น รายงานว่าวันนี้มากี่คน) รูปอัปโหลดตรงไปที่ Vercel Blob จากเบราว์เซอร์เลย ใครก็ดู feed/โพสต์/ลบโพสต์ได้ที่หน้านี้โดยไม่ต้องมี PIN
 - **นับคะแนน + Live Scoreboard** — ปุ่ม +/- คะแนนต่อทีมบนการ์ดแมตช์ (นับเกมเดียว win-by-2, cap ที่ targetScore+9) **คะแนนเป้าหมายต่อเกมปรับได้** (11/15/21 หรือกำหนดเอง — ตั้งตอนสร้าง session, ก่อนเริ่มจับคู่ หรือ "ปรับรอบถัดไป" แต่ละแมตช์จำค่าตอนสร้างไว้ ไม่เปลี่ยนตามถ้าแก้ทีหลัง) พร้อมหน้าจอคะแนนสดสาธารณะที่ `/scoreboard/[sessionId]` (ไม่ต้องมี PIN, อัปเดตทุก 2 วินาที) เอาไปเปิดจอทีวี/โปรเจกเตอร์ข้างคอร์ดได้
 - ปุ่มรีเซ็ตสถิติ (ล้างแมตช์/สถิติ แต่คง session ไว้) และปุ่มออกจาก session (ลืม session บนเครื่องนี้ ไม่ลบข้อมูลบนเซิร์ฟเวอร์)
 - **บันทึกลง MongoDB จริง** — ผู้เล่น/แมตช์/สถิติ/partner history ทั้งหมดอยู่บนเซิร์ฟเวอร์ผูกกับ session id ไม่ใช่ browser เดียวอีกต่อไป ปิด-เปิดหน้าใหม่ (ใส่ PIN ยืนยันอีกครั้ง) ข้อมูลยังอยู่ครบ
@@ -160,6 +160,18 @@ yarn dev
 - `yarn compile` alias ของ `yarn build`
 - `yarn start` รัน production server
 - `yarn lint` ตรวจ lint
+- `yarn test` รัน unit test (Vitest) — เทสฟังก์ชัน pure logic (`buildMatchesFromPlayers`, `assignTeams`, `getGameWinner` ฯลฯ) ไม่ต้องมี server/DB
+- `yarn test:watch` เหมือน `yarn test` แต่รันแบบ watch mode
+- `yarn test:e2e` รัน E2E test (Playwright) — ต้องมี local MongoDB (docker) รันอยู่ก่อน จะ auto start `yarn dev` ให้เอง ดู `tests/e2e/`
+
+## Testing
+
+โปรเจกต์นี้มี test 2 ระดับ:
+
+- **Unit test** (`src/**/*.test.ts`, รันด้วย `yarn test`) — เทสฟังก์ชัน pure logic ล้วน ๆ (matching algorithm, scoring) รันเร็ว ไม่ต้องมี server/DB จับบัคเรื่อง algorithm ผิดได้ แต่**ไม่จับบัคเรื่อง state transition/wiring**
+- **E2E test** (`tests/e2e/*.spec.ts`, รันด้วย `yarn test:e2e`) — จำลอง flow เต็มผ่านเบราว์เซอร์จริงกับ server+DB จริง (ต้องมี local MongoDB รันอยู่ก่อน — ดู Getting Started) ใช้จับบัคระดับ state machine ที่ unit test จับไม่ได้ เช่น "จบแมตช์แล้ว undo ไม่ได้จริง" (v0.9.14) และ "เพิ่มคอร์ดกลางเกมไม่สร้างแมตช์จริงให้" (v0.9.15) — ทั้งสองอันนี้เก็บไว้เป็น regression test แล้วที่ `tests/e2e/undo-finish.spec.ts` และ `tests/e2e/add-court.spec.ts`
+
+⚠️ E2E test สร้าง/แก้ข้อมูลจริงใน MongoDB ที่ `.env` ชี้ไป — เช็คให้แน่ใจว่าเป็น local Docker mongo เสมอ ห้ามรันตอน `.env` ชี้ไปที่ Atlas จริงเด็ดขาด (ดู Troubleshooting)
 
 ## How Match Generation Works
 

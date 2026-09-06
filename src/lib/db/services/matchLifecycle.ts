@@ -9,13 +9,13 @@ type MatchDoc = HydratedDocument<MatchDocument>;
 const pairKeyFor = (ids: string[]) => [...ids].sort().join('_');
 
 /** Badminton-style single-game scoring, parameterized by target score
- * (default 21): first to reach it wins if ahead by 2+; hard cap at
+ * (default 11): first to reach it wins if ahead by 2+; hard cap at
  * target + 9 wins outright regardless of margin (generalizes the
  * official 21-point game's 21/30 cap ratio to other targets like 11/15). */
 export function getGameWinner(
   scoreA: number,
   scoreB: number,
-  targetScore = 21,
+  targetScore = 11,
 ): 'A' | 'B' | null {
   const cap = targetScore + 9;
   if (scoreA >= cap) return 'A';

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { Target } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -17,6 +18,15 @@ export const TargetScoreSelector = ({
   onChange,
   disabled = false,
 }: TargetScoreSelectorProps) => {
+  // ช่องกำหนดเองเก็บ string ของตัวเองแยกจาก value ที่ commit แล้ว เพื่อให้ลบ/พิมพ์
+  // เลขใหม่ได้อิสระ (ไม่งั้นพอ input ว่างชั่วคราว parsed จะ invalid แล้ว onChange
+  // ไม่ถูกเรียก ทำให้ค่าเดิมเด้งกลับมาทันทีจน backspace ตัวสุดท้ายไม่ได้)
+  const [customInput, setCustomInput] = useState(String(value));
+
+  useEffect(() => {
+    setCustomInput(String(value));
+  }, [value]);
+
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2">
@@ -50,18 +60,30 @@ export const TargetScoreSelector = ({
             );
           })}
         </div>
+        <span className="text-[10px] font-medium text-muted-foreground">
+          หรือ
+        </span>
         <Input
           type="number"
           min={1}
           max={99}
-          value={value}
+          value={customInput}
           disabled={disabled}
           onChange={(event) => {
-            const parsed = Number(event.target.value);
-            if (Number.isInteger(parsed) && parsed >= 1 && parsed <= 99) {
+            const nextRaw = event.target.value;
+            setCustomInput(nextRaw);
+
+            const parsed = Number(nextRaw);
+            if (
+              nextRaw !== '' &&
+              Number.isInteger(parsed) &&
+              parsed >= 1 &&
+              parsed <= 99
+            ) {
               onChange(parsed);
             }
           }}
+          onBlur={() => setCustomInput(String(value))}
           className="h-8 w-16 rounded-full text-center text-xs"
         />
       </div>

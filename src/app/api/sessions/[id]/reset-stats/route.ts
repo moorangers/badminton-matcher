@@ -13,6 +13,12 @@ import { PartnerHistoryModel } from '@/lib/db/models/partnerHistory';
  * "clearAll" (which deleted the whole local dataset) — with shared,
  * durable session data, deleting the session itself would affect any other
  * device looking at it, so that is a separate, more deliberate action.
+ *
+ * Does NOT touch check-in status — anyone already 'checked_in'/'resting'
+ * stays eligible for matching immediately (only 'playing' gets bumped to
+ * 'checked_in' since their match was just deleted); previously this reset
+ * everyone to 'registered', silently kicking the whole room out of the
+ * matching pool until they re-checked in (see decision-log ADR-016).
  */
 export async function POST(
   _request: Request,
@@ -30,14 +36,12 @@ export async function POST(
   await MatchModel.deleteMany({ sessionId: id });
   await PartnerHistoryModel.deleteMany({ sessionId: id });
   await SessionPlayerModel.updateMany(
+    { sessionId: id, status: 'playing' },
+    { $set: { status: 'checked_in' } },
+  );
+  await SessionPlayerModel.updateMany(
     { sessionId: id },
-    {
-      $set: {
-        matchesPlayedInSession: 0,
-        queuedAt: now,
-        status: 'registered',
-      },
-    },
+    { $set: { matchesPlayedInSession: 0, queuedAt: now } },
   );
 
   return NextResponse.json({ ok: true });

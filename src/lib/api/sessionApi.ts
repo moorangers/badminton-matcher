@@ -8,6 +8,7 @@ export type MatchStatus = 'ready' | 'playing' | 'done';
 
 export interface ApiSession {
   id: string;
+  name: string | null;
   mode: ApiMode;
   status: 'open' | 'closed';
   activeCourts: number[];
@@ -82,14 +83,22 @@ export const createSession = (
   pin: string,
   activeCourts: number[],
   targetScore: number,
+  name?: string,
 ) =>
   request<ApiSession>('/sessions', {
     method: 'POST',
-    body: JSON.stringify({ mode, pin, activeCourts, targetScore }),
+    body: JSON.stringify({ mode, pin, activeCourts, targetScore, name }),
   });
 
 export const getSession = (sessionId: string) =>
   request<ApiSession>(`/sessions/${sessionId}`);
+
+/** Public — no PIN required. Lists the most recent sessions (name/date/
+ * mode/status only, never the PIN) so the create-session screen can offer
+ * "or pick an existing one" — safe to expose without auth since this app
+ * is one deployment per club (ADR-006), so every session here already
+ * belongs to the same club. */
+export const listSessions = () => request<ApiSession[]>('/sessions');
 
 export const updateSession = (
   sessionId: string,

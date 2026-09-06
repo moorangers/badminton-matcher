@@ -10,7 +10,7 @@
 | [architecture-design.md](./architecture-design.md) | สถาปัตยกรรมปัจจุบัน vs เป้าหมาย |
 | [database-design.md](./database-design.md) | ดีไซน์ schema MongoDB (ฉบับร่าง รอ Phase 0) |
 | [roadmap.md](./roadmap.md) | แผนฟีเจอร์แบ่งเฟส พร้อมสถานะแต่ละอัน |
-| [matching-algorithm.md](./matching-algorithm.md) | อัลกอริทึมจับคู่ปัจจุบัน + ดีไซน์ที่เสนอให้แก้เรื่อง fairness |
+| [matching-algorithm.md](./matching-algorithm.md) | อัลกอริทึมจับคู่ปัจจุบัน (implement แล้ว) + ข้อจำกัดที่รู้อยู่แล้วแต่ยังไม่แก้ |
 
 ## หลักการอัปเดตเอกสาร
 

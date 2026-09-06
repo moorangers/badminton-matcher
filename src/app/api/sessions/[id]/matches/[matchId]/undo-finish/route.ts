@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { MatchModel } from '@/lib/db/models/match';
+import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
 import {
   findActiveMatchForPlayers,
   findActiveMatchForCourt,
@@ -53,12 +54,31 @@ export async function POST(
     matchId,
   );
   if (courtAlreadyReused) {
-    return NextResponse.json(
-      {
-        error: `undo ไม่ได้ เพราะ Court ${match.court} มีแมตช์ใหม่เริ่มไปแล้วหลังจากจบแมตช์นี้`,
-      },
-      { status: 409 },
+    if (courtAlreadyReused.status !== 'ready') {
+      // The auto-filled replacement match has actually been started (or,
+      // shouldn't happen, already finished) — real gameplay may be in
+      // progress, so it's not safe to silently discard it.
+      return NextResponse.json(
+        {
+          error: `undo ไม่ได้ เพราะ Court ${match.court} มีแมตช์ใหม่เริ่มเล่นไปแล้วหลังจากจบแมตช์นี้`,
+        },
+        { status: 409 },
+      );
+    }
+
+    // finishMatch() auto-fills the court with a fresh 'ready' match right
+    // away — nobody has touched it yet (no score, not started), so it's
+    // safe to discard it and send its players back to the resting pool,
+    // then bring the undone match back onto the court.
+    const reusedPlayerIds = [
+      ...courtAlreadyReused.teamA,
+      ...courtAlreadyReused.teamB,
+    ].map((playerId) => playerId.toString());
+    await SessionPlayerModel.updateMany(
+      { _id: { $in: reusedPlayerIds } },
+      { $set: { status: 'resting', queuedAt: new Date() } },
     );
+    await courtAlreadyReused.deleteOne();
   }
 
   await revertMatchFinishStats(id, match);

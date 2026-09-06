@@ -29,7 +29,7 @@
 - [x] เพิ่ม partner-history penalty ตอนสุ่มจับคู่ — แก้ปัญหา "คู่แทบไม่เปลี่ยนเลย"
 - [x] ปุ่ม "ปิดคอร์ด/รวมคอร์ด" แบบ manual — คอร์ดที่ถูกปิด: match ที่กำลังเล่นจบทันที คนไปรวมคิวคอร์ดที่เหลือ (แก้ปัญหา "จองคอร์ด 1hr/2hr")
 - [x] ~~auto-trigger รวมคอร์ดตามเวลาจองจริง~~ — **ตัดสินใจไม่ทำ** (2026-09-06) manual ล้วนพอแล้วสำหรับตอนนี้ ดูเหตุผล/ทางเลือกที่พิจารณาใน ADR-010
-- รายละเอียด logic เดิม vs ที่เสนอใหม่ ดู [matching-algorithm.md](./matching-algorithm.md)
+- รายละเอียด logic ปัจจุบัน + ข้อจำกัดที่รู้อยู่แล้ว ดู [matching-algorithm.md](./matching-algorithm.md)
 
 ## Phase 2 — เช็คอิน 2 ขั้น + QR Self Check-in
 
@@ -50,7 +50,7 @@
 
 - [x] โพสต์ข้อความ + รูปภาพ — `POST /api/posts` (สร้าง), `GET /api/posts` (list แบบ cursor pagination), `DELETE /api/posts/:postId` — เก็บเป็น feed เดียวทั้ง deployment ไม่ผูกกับ session ใดโดยเฉพาะ (`sessionId` เป็นแค่ reference เผื่ออยากรู้ว่าโพสต์ตอนไหน)
 - [x] หน้า feed แสดงโพสต์ย้อนหลัง — public page `/board` ไม่ต้องมี PIN (ให้ทั้งชมรมดูได้ ไม่ใช่แค่คนมี PIN)
-- [x] โพสต์ได้จากหน้า dashboard เท่านั้น (เหมือน action อื่น ๆ ที่ผ่าน PIN gate ฝั่ง client — ไม่ได้ enforce PIN ที่ server เหมือนกับทุก endpoint อื่นในโปรเจกต์นี้)
+- [x] โพสต์/ลบโพสต์ได้จากหน้า `/board` โดยตรง (ย้ายมาจากการ์ดในหน้า dashboard เมื่อ 2026-09-06 — dashboard เหลือแค่ลิงก์เข้าหน้านี้ในเมนูบนสุด) ไม่ต้องมี PIN ทั้งโพสต์และลบ เพราะ `POST /api/posts`/`DELETE /api/posts/:postId` ไม่ enforce PIN ที่ server อยู่แล้ว (เหมือนทุก endpoint อื่นในโปรเจกต์นี้) — สอดคล้องกับที่ webboard ตั้งใจให้ทั้งชมรมโพสต์ได้ ไม่ใช่แค่แอดมิน
 - [x] อัปโหลดรูปตรงจากเบราว์เซอร์ไปที่ Vercel Blob เลย (ไม่ผ่าน server ก่อน) เพื่อเลี่ยง serverless request body size limit (~4.5MB) ที่รูปจากมือถือมักเกิน
 - [x] Validation พื้นฐาน: จำกัด 6 รูป/โพสต์, 10MB/รูป, เฉพาะ jpeg/png/webp/heic
 - [ ] **ยังไม่ได้ทดสอบการอัปโหลดรูปจริงกับ Vercel Blob** — ต้อง enable Blob storage ในโปรเจกต์ Vercel ก่อน (ดู README ส่วน Troubleshooting) ทดสอบแล้วแค่ path โพสต์ข้อความล้วนกับ path ที่ไม่มี token แล้ว error สุภาพ (ไม่ crash)
@@ -61,7 +61,7 @@
 **Dependency:** Phase 0 ✅
 
 - [x] UI นับคะแนนต่อแมตช์ — ปุ่ม +/- ต่อทีมบนการ์ดแมตช์ในหน้า dashboard, `POST /api/sessions/:id/matches/:matchId/score` (atomic `$inc` กัน race condition ตอนกดรัว ๆ — เจอบั๊กจริงระหว่างทดสอบและแก้แล้ว), คำนวณผู้ชนะเกมอัตโนมัติ (win-by-2, cap ที่ targetScore+9) ผ่าน `getGameWinner()` ใน `matchLifecycle.ts`
-- [x] **คะแนนเป้าหมายต่อเกมปรับได้** (ไม่ fix ที่ 21) — `Session.targetScore` ตั้งได้ตอนสร้าง session, หน้า pre-game, และ "ปรับรอบถัดไป" (มี preset 11/15/21 + กำหนดเอง) แต่ละแมตช์เก็บ snapshot ของตัวเอง เปลี่ยนกลางเกมไม่กระทบแมตช์ที่กำลังเล่นอยู่ (ดู [decision-log.md#adr-014](./decision-log.md))
+- [x] **คะแนนเป้าหมายต่อเกมปรับได้** (ไม่ fix ที่ 21) — `Session.targetScore` ตั้งได้ตอนสร้าง session, หน้า pre-game, และ "ปรับรอบถัดไป" (มี preset 11/15/21 + กำหนดเองผ่านช่องกรอกตัวเลข, default 11) แต่ละแมตช์เก็บ snapshot ของตัวเอง เปลี่ยนกลางเกมไม่กระทบแมตช์ที่กำลังเล่นอยู่ (ดู [decision-log.md#adr-014](./decision-log.md))
 - [x] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ — public page `/scoreboard/[sessionId]` ไม่ต้องมี PIN, poll ทุก 2 วินาที, ตัวอักษรใหญ่อ่านง่ายจากระยะไกล
 - [ ] ยังไม่ทำ: multi-game (best-of-3) tracking — นับแค่เกมเดียวต่อแมตช์ในตอนนี้ ถ้าจะทำ best-of-3 ค่อยว่ากันตอน Phase 5 (tournament) ที่น่าจะต้องการจริง ๆ
 
