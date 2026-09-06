@@ -4,7 +4,7 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.6.0
+> Current Version: v0.7.0
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
@@ -25,7 +25,8 @@
 ## Features
 
 - **สร้าง/เข้า session ด้วย PIN** — สร้าง session ใหม่ (เลือกโหมด+จำนวนคอร์ด+ตั้ง PIN 4-6 หลัก) หรือกลับเข้า session เดิมบนเครื่องเดิมโดยใส่ PIN ยืนยันอีกครั้งหลัง refresh หน้า
-- เพิ่มผู้เล่นแบบทันที
+- **เช็คอิน 2 ขั้น + ลิงก์/QR สาธารณะ** — ผู้เล่นลงชื่อล่วงหน้าหรือเช็คอินเองได้ผ่านหน้า `/checkin/[sessionId]` (ไม่ต้องมี PIN) รองรับทั้งคนที่ลงชื่อไว้ก่อนและ walk-in ที่ยังไม่เคยลงทะเบียน — คนที่ยังไม่เช็คอินจะไม่ถูกเอาไปสุ่มจนกว่าจะยืนยันว่าถึงคอร์ดแล้ว (แอดมินเช็คอินแทนได้จาก dashboard ด้วยถ้าผู้เล่นไม่มีมือถือ)
+- เพิ่มผู้เล่นแบบทันที (ผ่าน dashboard แอดมิน = เช็คอินให้อัตโนมัติ เพราะแอดมินเพิ่มตรงหน้าคอร์ดแปลว่าคนนั้นมาแล้ว)
 - จัดการผู้เล่นผ่าน Modal (`แก้ชื่อ` / `ลบผู้เล่น`)
 - ตรวจจับชื่อซ้ำ (ไม่สนตัวพิมพ์เล็ก/ใหญ่)
 - ตรวจสอบชื่อก่อนบันทึก (ห้ามว่าง, ห้ามชื่อซ้ำ, กด Enter เพื่อบันทึก / Esc เพื่อปิด)
@@ -56,6 +57,8 @@
 - `tailwindcss@3`
 - `sonner` (toast notifications)
 - `lucide-react` + `@iconify/react` (icons)
+- `qrcode` (QR code generation for the self check-in link)
+- `mongoose` (MongoDB) + `bcryptjs` (PIN hashing)
 
 ## Project Structure
 
@@ -66,6 +69,8 @@ src/
     page.tsx
     globals.css
     not-found.tsx
+    how-to-use/page.tsx      # in-app usage guide
+    checkin/[sessionId]/page.tsx  # public self check-in page (no PIN)
     api/
       health/route.ts
       players/[playerId]/route.ts
@@ -73,6 +78,8 @@ src/
       sessions/[id]/route.ts
       sessions/[id]/close-court/route.ts
       sessions/[id]/reset-stats/route.ts
+      sessions/[id]/register/route.ts       # public — pre-registration
+      sessions/[id]/checkin/route.ts        # public — check-in
       sessions/[id]/players/route.ts
       sessions/[id]/players/[sessionPlayerId]/route.ts
       sessions/[id]/matches/route.ts
@@ -87,6 +94,7 @@ src/
     MatchBoard.tsx
     ModeSelector.tsx
     PlayerList.tsx
+    QrCode.tsx
     ui/
       button.tsx
       card.tsx
@@ -100,7 +108,9 @@ src/
     db/
       mongodb.ts            # connection singleton
       models/               # mongoose schemas (session, player, sessionPlayer, match, partnerHistory)
-      services/matchLifecycle.ts  # shared stat/partner-history bump+revert logic
+      services/
+        matchLifecycle.ts   # shared stat/partner-history bump+revert logic
+        sessionPlayers.ts   # shared add-player/find-by-name-or-id logic (admin + public register/checkin)
   types/
     styles.d.ts
 public/

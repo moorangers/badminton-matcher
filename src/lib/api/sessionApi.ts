@@ -114,6 +114,28 @@ export const addSessionPlayers = (sessionId: string, names: string[]) =>
     { method: 'POST', body: JSON.stringify({ names }) },
   );
 
+/** Public — no PIN required. Pre-registers names for a session ahead of
+ * time; they still need to check in at the court before being eligible
+ * for the matching pool. */
+export const registerForSession = (sessionId: string, names: string[]) =>
+  request<{ accepted: ApiSessionPlayer[]; duplicates: string[] }>(
+    `/sessions/${sessionId}/register`,
+    { method: 'POST', body: JSON.stringify({ names }) },
+  );
+
+/** Public — no PIN required. Confirms someone is at the court: moves a
+ * pre-registered player to 'checked_in', or creates a fresh checked-in
+ * entry for a walk-in who never pre-registered. Idempotent if already
+ * checked in. Pass exactly one of sessionPlayerId or name. */
+export const checkInToSession = (
+  sessionId: string,
+  target: { sessionPlayerId: string } | { name: string },
+) =>
+  request<ApiSessionPlayer>(`/sessions/${sessionId}/checkin`, {
+    method: 'POST',
+    body: JSON.stringify(target),
+  });
+
 export const deleteSessionPlayer = (
   sessionId: string,
   sessionPlayerId: string,

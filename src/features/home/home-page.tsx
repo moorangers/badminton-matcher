@@ -14,6 +14,7 @@ import {
 } from '@/components/MatchBoard';
 import { ModeSelector, type Mode } from '@/components/ModeSelector';
 import { PlayerList, type Player } from '@/components/PlayerList';
+import { QrCode } from '@/components/QrCode';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
@@ -21,6 +22,7 @@ import { cn } from '@/lib/utils';
 import {
   ApiError,
   addSessionPlayers,
+  checkInToSession,
   closeCourt as closeCourtApi,
   createMatch,
   createSession,
@@ -89,6 +91,14 @@ const toLocalPlayer = (sessionPlayer: ApiSessionPlayer): Player => ({
   matches: sessionPlayer.matchesPlayedInSession,
   queuedAt: new Date(sessionPlayer.queuedAt).getTime(),
 });
+
+// Only 'checked_in'/'resting'/'playing' players are eligible for the
+// matching pool — 'registered' means they signed up ahead of time but
+// have not confirmed being at the court yet (see Phase 2 check-in flow).
+const toEligiblePlayers = (sessionPlayers: ApiSessionPlayer[]): Player[] =>
+  sessionPlayers
+    .filter((sessionPlayer) => sessionPlayer.status !== 'registered')
+    .map(toLocalPlayer);
 
 const getErrorMessage = (error: unknown) => {
   if (error instanceof Error) return error.message;
@@ -192,6 +202,7 @@ export function HomePage() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<ApiSession | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [origin, setOrigin] = useState('');
 
   // ---- create-session form ----
   const [createMode, setCreateMode] = useState<Mode>('doubles');
@@ -302,7 +313,7 @@ export function HomePage() {
       const historyMap = Object.fromEntries(
         rawHistory.map((entry) => [entry.pairKey, entry.timesPlayedTogether]),
       );
-      const localPlayers = rawPlayers.map(toLocalPlayer);
+      const eligiblePlayers = toEligiblePlayers(rawPlayers);
       const activeIds = new Set(
         rawMatches
           .filter((match) => match.status !== 'done')
@@ -313,7 +324,7 @@ export function HomePage() {
         courtIds: freshSession.activeCourts,
       };
       const preview = buildMatchesFromPlayers(
-        localPlayers,
+        eligiblePlayers,
         activeIds,
         plan,
         historyMap,
@@ -340,6 +351,10 @@ export function HomePage() {
   }, [sessionId, isAuthenticated]);
 
   useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+
+  useEffect(() => {
     if (!managePlayerDraft) return;
     const input = manageNameInputRef.current;
     if (!input) return;
@@ -348,8 +363,18 @@ export function HomePage() {
   }, [managePlayerDraft?.sessionPlayerId]);
 
   // ---- derived data ----
+  // Only checked-in+ players — 'registered' (signed up ahead of time,
+  // not yet confirmed at the court) are shown separately below and
+  // excluded from the roster/matching pool until they check in.
   const players = useMemo(
-    () => sessionPlayersRaw.map(toLocalPlayer),
+    () => toEligiblePlayers(sessionPlayersRaw),
+    [sessionPlayersRaw],
+  );
+  const registeredPlayers = useMemo(
+    () =>
+      sessionPlayersRaw
+        .filter((sessionPlayer) => sessionPlayer.status === 'registered')
+        .map(toLocalPlayer),
     [sessionPlayersRaw],
   );
   const playerById = useMemo(
@@ -415,7 +440,9 @@ export function HomePage() {
       .filter((match) => match.status === 'playing')
       .reduce((sum, match) => sum + match.teamA.length + match.teamB.length, 0);
     const restingRaw = sessionPlayersRaw.filter(
-      (sessionPlayer) => sessionPlayer.status !== 'playing',
+      (sessionPlayer) =>
+        sessionPlayer.status !== 'playing' &&
+        sessionPlayer.status !== 'registered',
     );
 
     return {
@@ -426,6 +453,7 @@ export function HomePage() {
   }, [activeMatches, sessionPlayersRaw]);
 
   const playersPerMatch = getPlayersPerMatch(draftMode);
+  const checkinUrl = origin && sessionId ? `${origin}/checkin/${sessionId}` : '';
   const displayMode =
     activeMatches.length > 0 ? (session?.mode ?? draftMode) : draftMode;
   const displayCourts =
@@ -539,7 +567,7 @@ export function HomePage() {
 
   const removePlayer = async (id: string): Promise<boolean> => {
     if (!sessionId) return false;
-    const target = players.find((player) => player.id === id);
+    const target = sessionPlayersRaw.find((sessionPlayer) => sessionPlayer.id === id);
     if (!target) return false;
 
     try {
@@ -558,6 +586,28 @@ export function HomePage() {
         variant: 'error',
       });
       return false;
+    }
+  };
+
+  const checkInPlayerNow = async (id: string) => {
+    if (!sessionId) return;
+    const target = registeredPlayers.find((player) => player.id === id);
+    if (!target) return;
+
+    try {
+      await checkInToSession(sessionId, { sessionPlayerId: id });
+      await refreshAll(sessionId);
+      showSnackbar({
+        title: `เช็คอิน ${target.name} แล้ว`,
+        description: 'เข้าคิวสุ่มได้แล้ว',
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'เช็คอินไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
     }
   };
 
@@ -749,7 +799,7 @@ export function HomePage() {
             .filter((match) => match.status !== 'done')
             .flatMap((match) => [...match.teamA, ...match.teamB]),
         );
-        const localPlayers = freshPlayers.map(toLocalPlayer);
+        const localPlayers = toEligiblePlayers(freshPlayers);
         const plan: SessionPlan = { mode: session.mode, courtIds: [court] };
         const { newMatches } = buildMatchesFromPlayers(
           localPlayers,
@@ -944,7 +994,7 @@ export function HomePage() {
       const freshHistory = Object.fromEntries(
         freshHistoryList.map((entry) => [entry.pairKey, entry.timesPlayedTogether]),
       );
-      const localPlayers = freshPlayers.map(toLocalPlayer);
+      const localPlayers = toEligiblePlayers(freshPlayers);
       const plan: SessionPlan = { mode: draftMode, courtIds };
       const { newMatches } = buildMatchesFromPlayers(
         localPlayers,
@@ -1448,6 +1498,81 @@ export function HomePage() {
             onAddMany={addPlayers}
             onManage={openManagePlayer}
           />
+        </section>
+
+        {registeredPlayers.length > 0 && (
+          <section className="rounded-3xl border border-secondary/50 bg-secondary/10 p-4 shadow-soft sm:p-6">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="font-display text-sm font-bold text-foreground">
+                รอเช็คอิน
+              </h3>
+              <span className="rounded-full bg-card px-2.5 py-1 font-display text-xs font-semibold text-muted-foreground">
+                {registeredPlayers.length} คน
+              </span>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              ลงชื่อล่วงหน้าไว้ แต่ยังไม่ยืนยันว่าถึงคอร์ดแล้ว — ยังไม่เข้าคิวสุ่มจนกว่าจะเช็คอิน
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {registeredPlayers.map((player) => (
+                <button
+                  key={player.id}
+                  type="button"
+                  onClick={() => checkInPlayerNow(player.id)}
+                  className="flex items-center gap-1.5 rounded-full bg-card py-1.5 pl-3 pr-2.5 font-display text-sm font-semibold text-foreground shadow-sm transition-smooth hover:bg-secondary/20"
+                >
+                  {player.name}
+                  <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-secondary-foreground">
+                    เช็คอิน
+                  </span>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
+          <div className="mb-2 flex items-center gap-2">
+            <Icon icon="mdi:qrcode" width="16" height="16" className="text-muted-foreground" />
+            <h3 className="font-display text-sm font-bold text-foreground">
+              ลิงก์ลงชื่อ/เช็คอินด้วยตัวเอง
+            </h3>
+          </div>
+          <p className="mb-3 text-xs text-muted-foreground">
+            ให้ผู้เล่นสแกน QR หรือเปิดลิงก์นี้เพื่อลงชื่อล่วงหน้าหรือเช็คอินเองได้ ไม่ต้องมี PIN
+          </p>
+          {checkinUrl && (
+            <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
+              <QrCode
+                value={checkinUrl}
+                size={140}
+                className="rounded-xl border border-border"
+              />
+              <div className="flex w-full flex-1 flex-col gap-2">
+                <Input
+                  readOnly
+                  value={checkinUrl}
+                  onFocus={(event) => event.currentTarget.select()}
+                  className="h-11 rounded-xl text-xs"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(checkinUrl);
+                      toast.success('คัดลอกลิงก์แล้ว');
+                    } catch {
+                      toast.error('คัดลอกไม่สำเร็จ');
+                    }
+                  }}
+                  className="h-11 rounded-xl text-xs font-bold"
+                >
+                  คัดลอกลิงก์
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">

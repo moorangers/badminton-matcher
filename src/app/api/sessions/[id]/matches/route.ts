@@ -95,13 +95,25 @@ export async function POST(
     );
   }
 
-  const matchingSessionPlayers = await SessionPlayerModel.countDocuments({
+  const matchingSessionPlayers = await SessionPlayerModel.find({
     _id: { $in: allPlayerIds },
     sessionId: id,
   });
-  if (matchingSessionPlayers !== allPlayerIds.length) {
+  if (matchingSessionPlayers.length !== allPlayerIds.length) {
     return NextResponse.json(
       { error: 'one or more players do not belong to this session' },
+      { status: 400 },
+    );
+  }
+  const notCheckedIn = matchingSessionPlayers.some(
+    (sessionPlayer) => sessionPlayer.status === 'registered',
+  );
+  if (notCheckedIn) {
+    return NextResponse.json(
+      {
+        error:
+          'one or more players have not checked in yet — they signed up but have not confirmed being at the court',
+      },
       { status: 400 },
     );
   }

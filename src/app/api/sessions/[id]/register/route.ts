@@ -2,33 +2,14 @@ import { NextResponse } from 'next/server';
 
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { SessionModel } from '@/lib/db/models/session';
-import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
-import {
-  addPlayersToSession,
-  serializeSessionPlayer,
-} from '@/lib/db/services/sessionPlayers';
+import { addPlayersToSession } from '@/lib/db/services/sessionPlayers';
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const { id } = await params;
-  await connectToDatabase();
-
-  const sessionPlayers = await SessionPlayerModel.find({ sessionId: id })
-    .populate('playerId', 'name')
-    .sort({ registeredAt: 1 })
-    .lean();
-
-  return NextResponse.json(
-    sessionPlayers.map((sessionPlayer) =>
-      serializeSessionPlayer(
-        sessionPlayer as Parameters<typeof serializeSessionPlayer>[0],
-      ),
-    ),
-  );
-}
-
+/**
+ * Public endpoint — no PIN required. Lets a player sign themselves up for
+ * a session ahead of time ("ลงชื่อล่วงหน้า"). They still need to check in
+ * at the court (POST .../checkin) before they're eligible for the
+ * matching pool.
+ */
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -50,11 +31,15 @@ export async function POST(
   if (!session) {
     return NextResponse.json({ error: 'session not found' }, { status: 404 });
   }
+  if (session.status !== 'open') {
+    return NextResponse.json(
+      { error: 'session is closed' },
+      { status: 400 },
+    );
+  }
 
-  // Added via the admin dashboard, in person at the court — treat as
-  // already checked in (no separate confirm-you're-here step needed).
   const { accepted, duplicates, rejectedForCapacity } =
-    await addPlayersToSession(id, rawNames, 'checked_in');
+    await addPlayersToSession(id, rawNames, 'registered');
 
   if (accepted.length === 0 && rejectedForCapacity > 0 && duplicates.length === 0) {
     return NextResponse.json(

@@ -34,13 +34,15 @@
 
 ## Phase 2 — เช็คอิน 2 ขั้น + QR Self Check-in
 
-**สถานะ:** not-started (unblocked — Phase 0 เสร็จแล้ว)
+**สถานะ:** done (2026-09-06) — ยกเว้น rate limiting จริงที่ยังไม่ทำ (ดูหมายเหตุด้านล่าง)
 **Dependency:** Phase 0 (ต้อง multi-device เห็น session เดียวกัน) ✅
 
-- [ ] แยกสถานะผู้เล่น: `registered` → `checked_in` → เข้า pool สุ่มได้
-- [ ] หน้าเช็คอินสำหรับผู้เล่น (มือถือตัวเอง)
-- [ ] QR code ต่อ session ชี้ไปหน้า public form (กรอกชื่อ ไม่ต้องลงทะเบียนล่วงหน้า)
-- [ ] กัน spam/ชื่อมั่ว (rate limit หรือ validation เพิ่มเติม)
+- [x] แยกสถานะผู้เล่น: `registered` → `checked_in` → เข้า pool สุ่มได้ — บังคับที่ทั้ง client (`toEligiblePlayers` กรอง `registered` ออกจาก pool/roster) และ server (`POST /matches` reject ถ้ามีผู้เล่น status `registered`)
+- [x] หน้าเช็คอินสำหรับผู้เล่น (มือถือตัวเอง) — public page `/checkin/[sessionId]` ไม่ต้องมี PIN รองรับทั้ง "ลงชื่อล่วงหน้า" และ "เช็คอินตอนถึงคอร์ด" ในหน้าเดียว
+- [x] QR code ต่อ session ชี้ไปหน้า public form — สร้าง client-side ด้วย `qrcode` package แสดงในหน้า dashboard (PIN-gated) พร้อมลิงก์ copy ได้
+- [x] เพิ่ม endpoint สาธารณะ (ไม่มี PIN): `POST /api/sessions/:id/register` (ลงชื่อล่วงหน้า), `POST /api/sessions/:id/checkin` (เช็คอิน — รองรับทั้งคนที่เคยลงชื่อไว้และ walk-in ที่ไม่เคยลงทะเบียน, idempotent ถ้าเช็คอินซ้ำ)
+- [x] แอดมินเช็คอินแทนได้จาก dashboard (สำหรับคนไม่มีมือถือ) ผ่านปุ่มในส่วน "รอเช็คอิน"
+- [ ] **กัน spam/ชื่อมั่ว แบบเต็มรูปแบบยังไม่ทำ** — มีแค่ validation พื้นฐาน (จำกัดความยาวชื่อ 40 ตัวอักษร, จำกัดจำนวนผู้เล่นต่อ session ไม่เกิน 60 คน `MAX_SESSION_PLAYERS`) endpoint สาธารณะยังไม่มี rate limiting ตาม IP จริง เพราะต้องพึ่ง infra เพิ่ม (Vercel KV/Upstash หรือคล้ายกัน) — เป็นความเสี่ยงที่รู้ไว้ ไม่ใช่ blocker
 
 ## Phase 3 — Webboard / Post Report
 
