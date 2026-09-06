@@ -6,7 +6,7 @@
 
 ## Phase 0 — Backend Foundation
 
-**สถานะ:** in-progress (foundation ทำงานได้แล้ว 2026-09-06 — sessions + players ผ่าน MongoDB จริง, ยังไม่มี matches/partnerHistory endpoints และยังไม่ได้ย้าย UI เดิมมาเรียก API)
+**สถานะ:** in-progress (foundation + matches/partnerHistory endpoints ทำงานได้แล้ว 2026-09-06, ยังไม่ได้ย้าย UI เดิมมาเรียก API)
 **ทำไมต้องทำ:** ทุกฟีเจอร์ multi-device (เช็คอินคนละเครื่อง, webboard, live score, QR check-in) เป็นไปไม่ได้บนสถาปัตยกรรม client-only + localStorage ปัจจุบัน — ดู [decision-log.md#adr-001](./decision-log.md)
 
 - [x] ตัดสินใจเรื่อง multi-tenant: 1 deployment ต่อ 1 ชมรม ([decision-log.md#adr-006](./decision-log.md))
@@ -15,8 +15,9 @@
 - [x] Schema เริ่มต้น: `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` (mongoose models ใน `src/lib/db/models/`)
 - [x] PIN auth ขั้นต่ำ: ตั้ง PIN ตอนสร้าง session (`POST /api/sessions`), ตรวจสอบผ่าน `POST /api/sessions/:id/verify-pin` (`src/lib/auth/pin.ts`, bcrypt hash)
 - [x] API Routes พื้นฐาน: `GET/POST /api/sessions`, `POST /api/sessions/:id/verify-pin`, `GET/POST /api/sessions/:id/players` — ทดสอบ end-to-end กับ MongoDB จริงแล้ว (สร้าง session, verify pin ถูก/ผิด, เพิ่มผู้เล่น, กันชื่อซ้ำ case-insensitive)
-- [ ] API สำหรับ `matches` และ `partnerHistory` (ยังไม่ implement — schema พร้อมแล้วแต่ยังไม่มี endpoint)
-- [ ] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — งานก้อนใหญ่ที่ยังไม่เริ่ม
+- [x] API สำหรับ `matches`: `GET/POST /api/sessions/:id/matches`, `PATCH /api/sessions/:id/matches/:matchId` — บังคับกฎ 1 คนไม่อยู่ 2 แมตช์พร้อมกัน, 1 คอร์ดมีได้แค่ 1 แมตช์ที่ยังไม่จบ, `done` จะ bump `matchesPlayedInSession` + partner history ให้อัตโนมัติ (ทดสอบ end-to-end กับ MongoDB จริงแล้ว)
+- [x] API สำหรับ `partnerHistory`: `GET /api/sessions/:id/partner-history` (resolve ชื่อผู้เล่นคืนมาด้วย, เขียนได้ทางเดียวผ่าน side-effect ตอนจบแมตช์เท่านั้น ไม่มี endpoint เขียนตรง)
+- [ ] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — งานก้อนใหญ่ที่ยังไม่เริ่ม (algorithm การจับคู่/เลือกทีมยังอยู่ฝั่ง client เหมือนเดิม backend แค่เก็บผลลัพธ์)
 - [ ] Deploy MongoDB จริงสำหรับ production (ตอนนี้ dev ใช้ container ในเครื่องเท่านั้น ยังไม่มีแผน production DB)
 
 ## Phase 1 — แก้ Matching Fairness + Court Merge

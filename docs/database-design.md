@@ -3,6 +3,8 @@
 > สถานะ: **draft/proposed** ยังไม่ได้ implement จริง เขียนไว้ล่วงหน้าเพื่อให้เห็นภาพว่าฟีเจอร์ที่คุยกันจะแมปกับ schema ยังไง จะปรับเมื่อเริ่มลงมือ Phase 0 จริง — เลือก MongoDB ตาม [decision-log.md#adr-003](./decision-log.md)
 >
 > **อัปเดต 2026-09-06:** ตัดสินใจแล้วว่าเป็น **1 deployment ต่อ 1 ชมรม** (ไม่มี multi-tenant/`clubId`) และ auth แอดมินใช้ **PIN ต่อ session** — ดู [decision-log.md#adr-006](./decision-log.md) และ [#adr-007](./decision-log.md) ปรับ schema ด้านล่างตามนี้แล้ว
+>
+> **อัปเดต 2026-09-06 (2):** `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` implement เป็น mongoose model จริงแล้วใน `src/lib/db/models/` พร้อม API endpoint ครบสำหรับ 3 อันแรกและ matches/partnerHistory (ดู [roadmap.md](./roadmap.md)) — schema ด้านล่างตรงกับโค้ดจริงแล้ว ยกเว้น `courtBookings`, `posts`, `tournaments`/`tournamentMatches` ที่ยังเป็นแค่แผน (Phase 1 auto-trigger, Phase 3, Phase 5 ตามลำดับ)
 
 ## คำถามที่ยังต้องตอบก่อนเริ่ม implement จริง
 
