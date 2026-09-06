@@ -94,10 +94,15 @@ export function HomePage() {
     setTotalFinishedMatches,
     removeTotalFinishedMatches,
   ] = useLocalStorage<number>('bm_totalFinishedMatches', 0);
+  const [partnerHistory, setPartnerHistory, removePartnerHistory] =
+    useLocalStorage<Record<string, number>>('bm_partnerHistory', {});
   const [managePlayerDraft, setManagePlayerDraft] =
     useState<ManagePlayerDraft | null>(null);
   const [pendingSubstitute, setPendingSubstitute] =
     useState<PendingSubstitute | null>(null);
+  const [pendingCourtClose, setPendingCourtClose] = useState<number | null>(
+    null,
+  );
   const [planDraft, setPlanDraft] = useState<SessionPlan | null>(null);
   const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
@@ -113,6 +118,7 @@ export function HomePage() {
     activeCourtIds: number[];
     nextPlan: SessionPlan | null;
     totalFinishedMatches: number;
+    partnerHistory: Record<string, number>;
     label: string;
   };
   const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
@@ -212,6 +218,7 @@ export function HomePage() {
         activeCourtIds,
         nextPlan,
         totalFinishedMatches,
+        partnerHistory,
         label,
       },
     ]);
@@ -229,6 +236,7 @@ export function HomePage() {
       setActiveCourtIds(snapshot.activeCourtIds);
       setNextPlan(snapshot.nextPlan);
       setTotalFinishedMatches(snapshot.totalFinishedMatches);
+      setPartnerHistory(snapshot.partnerHistory);
       return prev.slice(0, -1);
     });
   };
@@ -288,14 +296,6 @@ export function HomePage() {
     toast(title, options);
   };
 
-  const getRoundPlayerIds = (sourceMatches: Match[]) => {
-    return new Set(
-      sourceMatches
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
-  };
-
   const getActivePlayerIds = (sourceMatches: Match[]) => {
     return new Set(
       sourceMatches
@@ -314,48 +314,87 @@ export function HomePage() {
     return output;
   };
 
-  const rankCandidates = (
-    sourcePlayers: Player[],
-    recentlyPlayedIds: Set<string>,
-  ) => {
-    const grouped = new Map<number, Player[]>();
+  const rankCandidates = (sourcePlayers: Player[]) => {
+    return shufflePlayers(sourcePlayers).sort((a, b) => {
+      if (a.matches !== b.matches) return a.matches - b.matches;
+      return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);
+    });
+  };
 
-    sourcePlayers.forEach((player) => {
-      const tier = grouped.get(player.matches) ?? [];
-      tier.push(player);
-      grouped.set(player.matches, tier);
+  const getPairKey = (idA: string, idB: string) => [idA, idB].sort().join('_');
+
+  const incrementPartnerHistory = (
+    sourceHistory: Record<string, number>,
+    matchesToCount: Match[],
+  ) => {
+    const next = { ...sourceHistory };
+    const bumpTeam = (team: Player[]) => {
+      if (team.length !== 2) return;
+      const key = getPairKey(team[0].id, team[1].id);
+      next[key] = (next[key] ?? 0) + 1;
+    };
+
+    matchesToCount.forEach((match) => {
+      bumpTeam(match.teamA);
+      bumpTeam(match.teamB);
     });
 
-    const pool: Player[] = [];
-    Array.from(grouped.keys())
-      .sort((a, b) => a - b)
-      .forEach((key) => {
-        const tier = grouped.get(key)!;
-        const rested = tier.filter(
-          (player) => !recentlyPlayedIds.has(player.id),
-        );
-        const recentlyPlayed = tier.filter((player) =>
-          recentlyPlayedIds.has(player.id),
-        );
+    return next;
+  };
 
-        pool.push(...shufflePlayers(rested), ...shufflePlayers(recentlyPlayed));
-      });
+  const DOUBLES_PARTNER_COMBOS: [[number, number], [number, number]][] = [
+    [
+      [0, 1],
+      [2, 3],
+    ],
+    [
+      [0, 2],
+      [1, 3],
+    ],
+    [
+      [0, 3],
+      [1, 2],
+    ],
+  ];
 
-    return pool;
+  const assignTeams = (slice: Player[], history: Record<string, number>) => {
+    const half = slice.length / 2;
+
+    if (slice.length !== 4) {
+      return { teamA: slice.slice(0, half), teamB: slice.slice(half) };
+    }
+
+    const options = DOUBLES_PARTNER_COMBOS.map(([teamAIdx, teamBIdx]) => {
+      const teamA = teamAIdx.map((i) => slice[i]);
+      const teamB = teamBIdx.map((i) => slice[i]);
+      const score =
+        (history[getPairKey(teamA[0].id, teamA[1].id)] ?? 0) +
+        (history[getPairKey(teamB[0].id, teamB[1].id)] ?? 0);
+
+      return { teamA, teamB, score };
+    });
+
+    const lowestScore = Math.min(...options.map((option) => option.score));
+    const bestOptions = options.filter(
+      (option) => option.score === lowestScore,
+    );
+    const picked = bestOptions[Math.floor(Math.random() * bestOptions.length)];
+
+    return { teamA: picked.teamA, teamB: picked.teamB };
   };
 
   const buildMatchesFromPlayers = (
     sourcePlayers: Player[],
-    recentlyPlayedIds: Set<string> = new Set(),
     blockedIds: Set<string> = new Set(),
     plan: SessionPlan = currentPlan,
+    history: Record<string, number> = partnerHistory,
   ) => {
     const planCourtIds = normalizeCourtIds(plan.courtIds, courts);
     const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
     const availablePlayers = sourcePlayers.filter(
       (player) => !blockedIds.has(player.id),
     );
-    const pool = rankCandidates(availablePlayers, recentlyPlayedIds);
+    const pool = rankCandidates(availablePlayers);
 
     const newMatches: Match[] = [];
     const used = new Set<string>();
@@ -370,12 +409,12 @@ export function HomePage() {
 
       slice.forEach((player) => used.add(player.id));
 
-      const half = planPlayersPerMatch / 2;
+      const { teamA, teamB } = assignTeams(slice, history);
       newMatches.push({
         court: courtId,
         mode: plan.mode,
-        teamA: slice.slice(0, half),
-        teamB: slice.slice(half),
+        teamA,
+        teamB,
         status: 'ready',
       });
     }
@@ -387,9 +426,10 @@ export function HomePage() {
     sourcePlayers: Player[],
     playedIds: Set<string>,
   ) => {
+    const now = Date.now();
     return sourcePlayers.map((player) =>
       playedIds.has(player.id)
-        ? { ...player, matches: player.matches + 1 }
+        ? { ...player, matches: player.matches + 1, queuedAt: now }
         : player,
     );
   };
@@ -453,6 +493,9 @@ export function HomePage() {
       players,
       finishedPlayerIds,
     );
+    const historyAfterFinish = incrementPartnerHistory(partnerHistory, [
+      finishedMatch,
+    ]);
 
     const markedDoneMatches: Match[] = matches.map((match) =>
       match.court === court ? { ...match, status: 'done' } : match,
@@ -490,11 +533,12 @@ export function HomePage() {
         const preview = buildMatchesFromPlayers(
           playersAfterFinish,
           activeAfterPullIds,
-          activeAfterPullIds,
           plan,
+          historyAfterFinish,
         );
 
         setPlayers(playersAfterFinish);
+        setPartnerHistory(historyAfterFinish);
         setMatches(matchesAfterPull);
         setNextMatches(preview.newMatches);
         clearNextPlanIfApplied(matchesAfterPull);
@@ -511,8 +555,8 @@ export function HomePage() {
     const preview = buildMatchesFromPlayers(
       playersAfterFinish,
       activeAfterFinishIds,
-      activeAfterFinishIds,
       plan,
+      historyAfterFinish,
     );
     const sameCourtGeneratedIndex = preview.newMatches.findIndex(
       (match) => match.court === court,
@@ -542,11 +586,12 @@ export function HomePage() {
       const nextPreview = buildMatchesFromPlayers(
         playersAfterFinish,
         activeAfterGeneratedPullIds,
-        activeAfterGeneratedPullIds,
         plan,
+        historyAfterFinish,
       );
 
       setPlayers(playersAfterFinish);
+      setPartnerHistory(historyAfterFinish);
       setMatches(matchesAfterGeneratedPull);
       setNextMatches(nextPreview.newMatches);
       clearNextPlanIfApplied(matchesAfterGeneratedPull);
@@ -566,11 +611,12 @@ export function HomePage() {
       const nextPreview = buildMatchesFromPlayers(
         playersAfterFinish,
         preview.used,
-        preview.used,
         plan,
+        historyAfterFinish,
       );
 
       setPlayers(playersAfterFinish);
+      setPartnerHistory(historyAfterFinish);
       setMatches(preview.newMatches);
       setNextMatches(nextPreview.newMatches);
       clearNextPlanIfApplied(preview.newMatches);
@@ -583,6 +629,7 @@ export function HomePage() {
     }
 
     setPlayers(playersAfterFinish);
+    setPartnerHistory(historyAfterFinish);
     setMatches(updatedMatches);
     setNextMatches(preview.newMatches);
     clearNextPlanIfApplied(updatedMatches);
@@ -592,6 +639,93 @@ export function HomePage() {
       description: 'อัปเดตสถานะเป็นจบแมตช์แล้ว',
       variant: 'success',
     });
+  };
+
+  const closeCourtNow = (court: number) => {
+    const targetMatch = matches.find((match) => match.court === court);
+    if (!targetMatch) return;
+
+    pushUndo(`ปิด Court ${court}`, 'finish', court);
+
+    const wasPlaying = targetMatch.status === 'playing';
+    const affectedPlayerIds = new Set(
+      [...targetMatch.teamA, ...targetMatch.teamB].map((player) => player.id),
+    );
+    const now = Date.now();
+    const playersAfterClose = players.map((player) =>
+      affectedPlayerIds.has(player.id)
+        ? {
+            ...player,
+            matches: wasPlaying ? player.matches + 1 : player.matches,
+            queuedAt: now,
+          }
+        : player,
+    );
+    const historyAfterClose = wasPlaying
+      ? incrementPartnerHistory(partnerHistory, [targetMatch])
+      : partnerHistory;
+
+    if (wasPlaying) {
+      setTotalFinishedMatches((prev) => prev + 1);
+    }
+
+    const remainingMatches = matches.filter((match) => match.court !== court);
+    const remainingCourtIds = sessionCourtIds.filter((id) => id !== court);
+
+    if (nextPlan) {
+      setNextPlan({
+        ...nextPlan,
+        courtIds: nextPlan.courtIds.filter((id) => id !== court),
+      });
+    }
+
+    if (remainingCourtIds.length === 0) {
+      setPlayers(playersAfterClose);
+      setPartnerHistory(historyAfterClose);
+      setMatches([]);
+      setNextMatches([]);
+      setActiveCourtIds([]);
+      showSnackbar({
+        title: `ปิด Court ${court} แล้ว`,
+        description: 'ไม่มีคอร์ดที่เปิดอยู่แล้ว',
+        variant: 'info',
+      });
+      return;
+    }
+
+    const closedPlan: SessionPlan = {
+      mode: currentPlan.mode,
+      courtIds: remainingCourtIds,
+    };
+    const blockedIds = getActivePlayerIds(remainingMatches);
+    const preview = buildMatchesFromPlayers(
+      playersAfterClose,
+      blockedIds,
+      closedPlan,
+      historyAfterClose,
+    );
+
+    setPlayers(playersAfterClose);
+    setPartnerHistory(historyAfterClose);
+    setMatches(remainingMatches);
+    setNextMatches(preview.newMatches);
+    setActiveCourtIds(remainingCourtIds);
+
+    showSnackbar({
+      title: `ปิด Court ${court} แล้ว`,
+      description: 'ย้ายผู้เล่นเข้าคิวรวมกับคอร์ดที่เหลือแล้ว',
+      variant: 'success',
+    });
+  };
+
+  const requestCloseCourt = (court: number) => {
+    setPendingCourtClose(court);
+  };
+
+  const confirmCloseCourt = () => {
+    if (pendingCourtClose === null) return;
+    closeCourtNow(pendingCourtClose);
+    setPendingCourtClose(null);
   };
 
   const addPlayers = (names: string[]) => {
@@ -619,17 +753,14 @@ export function HomePage() {
         id: crypto.randomUUID(),
         name,
         matches: 0,
+        queuedAt: Date.now(),
       }));
       const updatedPlayers = [...players, ...acceptedPlayers];
 
       setPlayers(updatedPlayers);
       if (matches.length > 0) {
         const activeIds = getActivePlayerIds(matches);
-        const preview = buildMatchesFromPlayers(
-          updatedPlayers,
-          activeIds,
-          activeIds,
-        );
+        const preview = buildMatchesFromPlayers(updatedPlayers, activeIds);
         setNextMatches(preview.newMatches);
       } else {
         setNextMatches([]);
@@ -680,11 +811,7 @@ export function HomePage() {
     setPlayers(updatedPlayers);
     if (matches.length > 0) {
       const activeIds = getActivePlayerIds(matches);
-      const preview = buildMatchesFromPlayers(
-        updatedPlayers,
-        activeIds,
-        activeIds,
-      );
+      const preview = buildMatchesFromPlayers(updatedPlayers, activeIds);
       setNextMatches(preview.newMatches);
     } else {
       setNextMatches([]);
@@ -855,8 +982,7 @@ export function HomePage() {
       return;
     }
 
-    const recentIds = getRoundPlayerIds(matches);
-    const replacement = rankCandidates(candidatePool, recentIds)[0];
+    const replacement = rankCandidates(candidatePool)[0];
     if (!replacement) {
       setPendingSubstitute(null);
       showSnackbar({
@@ -877,14 +1003,18 @@ export function HomePage() {
       ),
     }));
 
+    const updatedPlayers = players.map((player) =>
+      player.id === target.playerId
+        ? { ...player, queuedAt: Date.now() }
+        : player,
+    );
     const preview = buildMatchesFromPlayers(
-      players,
-      getActivePlayerIds(updatedMatches),
+      updatedPlayers,
       getActivePlayerIds(updatedMatches),
     );
 
     setMatches(updatedMatches);
-    setPlayers(players);
+    setPlayers(updatedPlayers);
     setNextMatches(preview.newMatches);
     setPendingSubstitute(null);
 
@@ -971,12 +1101,7 @@ export function HomePage() {
     pushUndo('เปลี่ยนแผนรอบถัดไป', 'plan');
 
     const activeIds = getActivePlayerIds(matches);
-    const preview = buildMatchesFromPlayers(
-      players,
-      activeIds,
-      activeIds,
-      plan,
-    );
+    const preview = buildMatchesFromPlayers(players, activeIds, plan);
 
     setMode(plan.mode);
     setCourts(plan.courtIds.length);
@@ -1021,7 +1146,6 @@ export function HomePage() {
     const currentRound = buildMatchesFromPlayers(
       players,
       new Set(),
-      new Set(),
       startPlan,
     );
     if (currentRound.newMatches.length === 0) {
@@ -1034,12 +1158,7 @@ export function HomePage() {
     }
 
     const activeAfterIds = getActivePlayerIds(currentRound.newMatches);
-    const preview = buildMatchesFromPlayers(
-      players,
-      activeAfterIds,
-      activeAfterIds,
-      startPlan,
-    );
+    const preview = buildMatchesFromPlayers(players, activeAfterIds, startPlan);
 
     setPlayers(players);
     setMatches(currentRound.newMatches);
@@ -1060,13 +1179,17 @@ export function HomePage() {
   };
 
   const resetStats = () => {
-    setPlayers(players.map((player) => ({ ...player, matches: 0 })));
+    const now = Date.now();
+    setPlayers(
+      players.map((player) => ({ ...player, matches: 0, queuedAt: now })),
+    );
     setMatches([]);
     setNextMatches([]);
     setActiveCourtIds(getCourtIds(courts));
     setNextPlan(null);
     setPlanDraft(null);
     setTotalFinishedMatches(0);
+    setPartnerHistory({});
     setUndoStack([]);
     showSnackbar({
       title: 'รีเซ็ตเรียบร้อย',
@@ -1084,6 +1207,7 @@ export function HomePage() {
     removeActiveCourtIds();
     removeNextPlan();
     removeTotalFinishedMatches();
+    removePartnerHistory();
     setPlanDraft(null);
     setUndoStack([]);
     toast.dismiss();
@@ -1264,6 +1388,36 @@ export function HomePage() {
                 className="rounded-xl bg-primary text-primary-foreground"
               >
                 ยืนยันและสุ่มแทน
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingCourtClose !== null && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h3 className="font-display text-lg font-extrabold text-foreground">
+              ยืนยันปิด Court {pendingCourtClose}
+            </h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              {`ระบบจะจบแมตช์ที่กำลังเล่นอยู่ใน Court ${pendingCourtClose} ทันที ปิดคอร์ดนี้ถาวรสำหรับรอบนี้ และย้ายผู้เล่นทั้งหมดไปรวมคิวกับคอร์ดที่เหลือ`}
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setPendingCourtClose(null)}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmCloseCourt}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                ยืนยันปิดคอร์ด
               </Button>
             </div>
           </div>
@@ -1459,6 +1613,7 @@ export function HomePage() {
               restingPlayers={stats.restingPlayers}
               onStatusChange={updateMatchStatus}
               onFinish={finishMatch}
+              onCloseCourt={requestCloseCourt}
               onSubstitutePlayer={requestSubstitutePlayer}
               undoableCourtId={undoableCourtId}
               onUndoCourtFinish={undoLatestFinishByCourt}

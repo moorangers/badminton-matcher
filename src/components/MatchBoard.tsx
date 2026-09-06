@@ -3,6 +3,7 @@ import {
   Check,
   CheckCircle2,
   Coffee,
+  GitMerge,
   Pause,
   Play,
   RotateCcw,
@@ -35,6 +36,7 @@ interface MatchBoardProps {
   showActions?: boolean;
   onStatusChange?: (court: number, status: MatchStatus) => void;
   onFinish?: (court: number) => void;
+  onCloseCourt?: (court: number) => void;
   onSubstitutePlayer?: (playerId: string) => void;
   undoableCourtId?: number;
   onUndoCourtFinish?: (court: number) => void;
@@ -76,6 +78,7 @@ export const MatchBoard = ({
   showActions = true,
   onStatusChange,
   onFinish,
+  onCloseCourt,
   onSubstitutePlayer,
   undoableCourtId,
   onUndoCourtFinish,
@@ -223,6 +226,18 @@ export const MatchBoard = ({
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         จบแมตช์
                       </Button>
+                      {onCloseCourt && m.status !== 'done' && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => onCloseCourt(m.court)}
+                          className="h-8 shrink-0 rounded-full px-3 font-display text-xs font-bold text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <GitMerge className="h-3.5 w-3.5" />
+                          ปิดคอร์ด
+                        </Button>
+                      )}
                     </div>
                     {undoableCourtId === m.court && (
                       <div className="ml-auto flex shrink-0 justify-end">
