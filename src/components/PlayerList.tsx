@@ -8,6 +8,7 @@ export interface Player {
   id: string;
   name: string;
   matches: number;
+  queuedAt: number;
 }
 
 interface PlayerListProps {

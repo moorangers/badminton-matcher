@@ -1,10 +1,10 @@
 # Badminton Matcher
 
-แอปสำหรับช่วยจัดคู่แบดมินตันแบบรวดเร็วและยุติธรรม รองรับทั้ง 1v1 และ 2v2 พร้อมเลือกจำนวนคอร์ด สุ่มผู้เล่นลงสนาม และบันทึกข้อมูลอัตโนมัติ
+แอปสำหรับช่วยจัดคู่แบดมินตันแบบรวดเร็วและยุติธรรม รองรับทั้ง 1v1 และ 2v2 พร้อมเลือกจำนวนคอร์ด สุ่มผู้เล่นลงสนาม และบันทึกข้อมูลลง MongoDB จริง (แชร์ session เดียวกันได้)
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.4.2
+> Current Version: v0.9.20
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
@@ -24,25 +24,31 @@
 
 ## Features
 
-- เพิ่มผู้เล่นแบบทันที
+- **สร้าง/เข้า session ด้วย PIN** — สร้าง session ใหม่ (เลือกโหมด+จำนวนคอร์ด+ตั้ง PIN 4-6 หลัก) หรือกลับเข้า session เดิมบนเครื่องเดิมโดยใส่ PIN ยืนยันอีกครั้งหลัง refresh หน้า
+- **เช็คอิน 2 ขั้น + ลิงก์/QR สาธารณะ** — ผู้เล่นลงชื่อล่วงหน้าหรือเช็คอินเองได้ผ่านหน้า `/checkin/[sessionId]` (ไม่ต้องมี PIN) รองรับทั้งคนที่ลงชื่อไว้ก่อนและ walk-in ที่ยังไม่เคยลงทะเบียน — คนที่ยังไม่เช็คอินจะไม่ถูกเอาไปสุ่มจนกว่าจะยืนยันว่าถึงคอร์ดแล้ว (แอดมินเช็คอินแทนได้จาก dashboard ด้วยถ้าผู้เล่นไม่มีมือถือ)
+- เพิ่มผู้เล่นแบบทันที (ผ่าน dashboard แอดมิน = เช็คอินให้อัตโนมัติ เพราะแอดมินเพิ่มตรงหน้าคอร์ดแปลว่าคนนั้นมาแล้ว)
 - จัดการผู้เล่นผ่าน Modal (`แก้ชื่อ` / `ลบผู้เล่น`)
 - ตรวจจับชื่อซ้ำ (ไม่สนตัวพิมพ์เล็ก/ใหญ่)
 - ตรวจสอบชื่อก่อนบันทึก (ห้ามว่าง, ห้ามชื่อซ้ำ, กด Enter เพื่อบันทึก / Esc เพื่อปิด)
 - เลือกโหมดการเล่น `Singles` หรือ `Doubles`
-- เลือกจำนวนคอร์ดได้ `1-4` คอร์ด
+- เลือกจำนวนคอร์ดได้ `1-3` คอร์ด
 - จับคู่โดยให้ความสำคัญกับผู้เล่นที่ลงน้อยก่อน (fair rotation)
-- **Deprioritize คนที่เพิ่งเล่น** — ภายในกลุ่มที่มี match count เท่ากัน ระบบจะจัดคนที่ยังไม่ได้เล่นรอบล่าสุดขึ้นก่อนเสมอ
+- **Wait-time fairness** — ภายในกลุ่มที่มี match count เท่ากัน ระบบจะจัดคนที่เข้าคิว/พักมานานกว่าขึ้นก่อนเสมอ (ไม่ใช่แค่สุ่มล้วน)
+- **Partner-history balancing** — ตอนจับทีมในกลุ่มที่ลงคอร์ด ระบบจะเลือกจับคู่ที่เคยเป็นทีมเดียวกันน้อยที่สุดก่อน ลดโอกาสได้จับคู่เดิมซ้ำ ๆ
 - จัดการสถานะแมตช์ต่อคอร์ด (`พร้อมเริ่ม`, `กำลังเล่น`, `จบแล้ว`)
 - มี quick actions ต่อคอร์ด (`เริ่ม`, `จบแมตช์`)
+- **ปิดคอร์ด** — บังคับจบแมตช์ที่กำลังเล่นในคอร์ดนั้นทันที ปิดคอร์ดถาวรสำหรับรอบนั้น แล้วย้ายผู้เล่นไปรวมคิวกับคอร์ดที่เหลือ (เช่น คอร์ดที่จองเวลาสั้นกว่าหมดเวลาก่อน) มี modal ยืนยันก่อนทุกครั้ง
 - มีตัวอย่าง `คู่ถัดไป` และรองรับเลื่อนรอบอัตโนมัติเมื่อจบครบทุกคอร์ด
 - แสดงผู้เล่นที่กำลังพัก และจำนวนแมตช์สะสมของแต่ละคน
 - แสดงจำนวน `แมตช์รวมที่เล่นไปแล้ว` แบบสะสม
 - **เพิ่มผู้เล่นระหว่างเกม** — คู่ถัดไปจะถูก regenerate ทันทีโดยผู้เล่นใหม่จะถูก prioritize เข้าสนามก่อน
 - **ลบผู้เล่นระหว่างเกม** — ถ้าผู้เล่นไม่ได้อยู่ใน active match จะลบได้ทันที และ regenerate คู่ถัดไป / ถ้าอยู่ใน active match จะเปิด flow เปลี่ยนตัวก่อน
 - **Substitute Player** — กดไอคอน `⇄` ที่ชื่อผู้เล่นใน court card ได้โดยตรง ระบบจะ confirm แล้วสุ่มคนพักมาแทนอัตโนมัติ ผู้เล่นเดิมจะ `ไปพัก` (ไม่ถูกลบจากรายชื่อ)
-- ปุ่มรีเซ็ตสถิติ และปุ่มล้างข้อมูลทั้งหมด
-- **บันทึกอัตโนมัติ (localStorage)** — สถานะทั้งหมด (โหมด, คอร์ด, ผู้เล่น, แมตช์, คู่ถัดไป, แมตช์รวมที่เล่นไปแล้ว) จะถูกบันทึกไว้ใน browser อัตโนมัติ ปิด-เปิดหน้าใหม่ได้โดยไม่สูญข้อมูล
-- **ย้อนกลับล่าสุด (Undo)** — ปุ่ม `ย้อนกลับล่าสุด` อยู่ข้างปุ่ม `จบแมตช์` แต่ละคอร์ด กดเพื่อยกเลิกการกด "จบแมตช์" ครั้งล่าสุดได้ทันที รองรับย้อนกลับต่อเนื่องได้สูงสุด 5 ครั้ง
+- **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพได้ที่หน้า `/board` (ลิงก์อยู่ในเมนูบนสุด, เช่น รายงานว่าวันนี้มากี่คน) รูปอัปโหลดตรงไปที่ Vercel Blob จากเบราว์เซอร์เลย ใครก็ดู feed/โพสต์/ลบโพสต์ได้ที่หน้านี้โดยไม่ต้องมี PIN
+- **นับคะแนน + Live Scoreboard** — ปุ่ม +/- คะแนนต่อทีมบนการ์ดแมตช์ (นับเกมเดียว win-by-2, cap ที่ targetScore+9) **คะแนนเป้าหมายต่อเกมปรับได้** (11/15/21 หรือกำหนดเอง — ตั้งตอนสร้าง session, ก่อนเริ่มจับคู่ หรือ "ปรับรอบถัดไป" แต่ละแมตช์จำค่าตอนสร้างไว้ ไม่เปลี่ยนตามถ้าแก้ทีหลัง) พร้อมหน้าจอคะแนนสดสาธารณะที่ `/scoreboard/[sessionId]` (ไม่ต้องมี PIN, อัปเดตทุก 2 วินาที) เอาไปเปิดจอทีวี/โปรเจกเตอร์ข้างคอร์ดได้
+- ปุ่มรีเซ็ตสถิติ (ล้างแมตช์/สถิติ แต่คง session ไว้) และปุ่มออกจาก session (ลืม session บนเครื่องนี้ ไม่ลบข้อมูลบนเซิร์ฟเวอร์)
+- **บันทึกลง MongoDB จริง** — ผู้เล่น/แมตช์/สถิติ/partner history ทั้งหมดอยู่บนเซิร์ฟเวอร์ผูกกับ session id ไม่ใช่ browser เดียวอีกต่อไป ปิด-เปิดหน้าใหม่ (ใส่ PIN ยืนยันอีกครั้ง) ข้อมูลยังอยู่ครบ
+- **ย้อนกลับล่าสุด (Undo)** — ปุ่ม `ย้อนกลับคอร์ดนี้` โผล่เฉพาะคอร์ดที่กด `จบแมตช์` ล่าสุดจริง ๆ เท่านั้น (ครั้งเดียว ไม่ใช่ stack หลายขั้น) ยกเลิกไม่ได้ถ้ามีคนถูกจัดลงแมตช์อื่นไปแล้วหลังจากนั้น
 - แจ้งเตือนแบบ toast (top-right) ด้วย Sonner และหายอัตโนมัติใน 3000ms
 
 ## Tech Stack
@@ -53,6 +59,9 @@
 - `tailwindcss@3`
 - `sonner` (toast notifications)
 - `lucide-react` + `@iconify/react` (icons)
+- `qrcode` (QR code generation for the self check-in link)
+- `mongoose` (MongoDB) + `bcryptjs` (PIN hashing)
+- `@vercel/blob` (photo storage for the webboard)
 
 ## Project Structure
 
@@ -63,6 +72,30 @@ src/
     page.tsx
     globals.css
     not-found.tsx
+    how-to-use/page.tsx      # in-app usage guide
+    checkin/[sessionId]/page.tsx  # public self check-in page (no PIN)
+    board/page.tsx           # public webboard feed (no PIN)
+    scoreboard/[sessionId]/page.tsx  # public live scoreboard display (no PIN, polls every 2s)
+    api/
+      health/route.ts
+      players/[playerId]/route.ts
+      posts/route.ts                 # webboard: list/create
+      posts/[postId]/route.ts        # webboard: delete
+      posts/upload/route.ts          # Vercel Blob client-upload handler
+      sessions/route.ts
+      sessions/[id]/route.ts
+      sessions/[id]/close-court/route.ts
+      sessions/[id]/reset-stats/route.ts
+      sessions/[id]/register/route.ts       # public — pre-registration
+      sessions/[id]/checkin/route.ts        # public — check-in
+      sessions/[id]/players/route.ts
+      sessions/[id]/players/[sessionPlayerId]/route.ts
+      sessions/[id]/matches/route.ts
+      sessions/[id]/matches/[matchId]/route.ts
+      sessions/[id]/matches/[matchId]/score/route.ts        # +/- point scoring
+      sessions/[id]/matches/[matchId]/substitute/route.ts
+      sessions/[id]/matches/[matchId]/undo-finish/route.ts
+      sessions/[id]/partner-history/route.ts
   features/
     home/home-page.tsx
   components/
@@ -70,6 +103,7 @@ src/
     MatchBoard.tsx
     ModeSelector.tsx
     PlayerList.tsx
+    QrCode.tsx
     ui/
       button.tsx
       card.tsx
@@ -77,7 +111,16 @@ src/
       sonner.tsx
   lib/
     utils.ts
-    useLocalStorage.ts
+    appVersion.ts
+    api/sessionApi.ts       # typed fetch client the UI uses to call the API above
+    api/postsApi.ts         # webboard client (list/create/delete + Blob upload helper)
+    auth/pin.ts             # PIN hash/verify (bcrypt)
+    db/
+      mongodb.ts            # connection singleton
+      models/               # mongoose schemas (session, player, sessionPlayer, match, partnerHistory, post)
+      services/
+        matchLifecycle.ts   # shared stat/partner-history bump+revert logic, serializeMatch, getGameWinner
+        sessionPlayers.ts   # shared add-player/find-by-name-or-id logic (admin + public register/checkin)
   types/
     styles.d.ts
 public/
@@ -101,6 +144,15 @@ yarn dev
 
 เปิดเบราว์เซอร์ที่ `http://localhost:3000`
 
+### Backend (MongoDB — ต้อง setup ก่อนรัน)
+
+หน้าเว็บหลักเรียก API จริงแล้ว (ไม่ใช่ localStorage) — ทุก action (เพิ่มผู้เล่น, จับคู่, จบแมตช์, ปิดคอร์ด ฯลฯ) ต้องมี MongoDB ต่ออยู่ถึงจะใช้งานได้ รายละเอียด endpoint ทั้งหมดดู [docs/roadmap.md](docs/roadmap.md) และ [docs/database-design.md](docs/database-design.md)
+
+1. ต้องมี MongoDB รันอยู่แล้ว — **ใช้ local container สำหรับ dev เท่านั้น อย่าใช้ Atlas จริงตรง ๆ** (โปรเจกต์นี้ไม่มี docker-compose ของตัวเอง เพราะ dev เครื่องนี้ใช้ container ที่มีอยู่แล้วร่วมกับโปรเจกต์อื่น ดู [docs/decision-log.md#adr-008](docs/decision-log.md#adr-008) และ [#adr-012](docs/decision-log.md#adr-012) ว่าทำไมถึงสำคัญ)
+2. คัดลอก `.env.example` เป็น `.env` แล้วปรับ `MONGODB_URI` ให้ชี้ไปที่ MongoDB local ของตัวเอง (ใช้ database name แยกจากโปรเจกต์อื่น)
+3. `yarn dev` แล้วลองยิง `GET /api/health` เพื่อเช็คว่าเชื่อม MongoDB สำเร็จ ก่อนเปิดหน้าเว็บหลัก
+4. (ถ้าจะทดสอบอัปโหลดรูปในกระดานข่าว) เพิ่ม `BLOB_READ_WRITE_TOKEN` ใน `.env` — คัดลอกมาจาก Vercel project ที่ enable Blob storage แล้ว (Storage tab) ไม่งั้นการโพสต์ข้อความล้วนยังใช้ได้ปกติ แต่แนบรูปจะ error สุภาพว่ายังไม่ได้ตั้งค่า
+
 ## Available Scripts
 
 - `yarn dev` รันโหมดพัฒนา
@@ -108,29 +160,50 @@ yarn dev
 - `yarn compile` alias ของ `yarn build`
 - `yarn start` รัน production server
 - `yarn lint` ตรวจ lint
+- `yarn test` รัน unit test (Vitest) — เทสฟังก์ชัน pure logic (`buildMatchesFromPlayers`, `assignTeams`, `getGameWinner` ฯลฯ) ไม่ต้องมี server/DB
+- `yarn test:watch` เหมือน `yarn test` แต่รันแบบ watch mode
+- `yarn test:e2e` รัน E2E test (Playwright) — ต้องมี local MongoDB (docker) รันอยู่ก่อน จะ auto start `yarn dev` ให้เอง ดู `tests/e2e/`
+
+## Testing
+
+โปรเจกต์นี้มี test 2 ระดับ:
+
+- **Unit test** (`src/**/*.test.ts`, รันด้วย `yarn test`) — เทสฟังก์ชัน pure logic ล้วน ๆ (matching algorithm, scoring) รันเร็ว ไม่ต้องมี server/DB จับบัคเรื่อง algorithm ผิดได้ แต่**ไม่จับบัคเรื่อง state transition/wiring**
+- **E2E test** (`tests/e2e/*.spec.ts`, รันด้วย `yarn test:e2e`) — จำลอง flow เต็มผ่านเบราว์เซอร์จริงกับ server+DB จริง (ต้องมี local MongoDB รันอยู่ก่อน — ดู Getting Started) ใช้จับบัคระดับ state machine ที่ unit test จับไม่ได้ เช่น "จบแมตช์แล้ว undo ไม่ได้จริง" (v0.9.14) และ "เพิ่มคอร์ดกลางเกมไม่สร้างแมตช์จริงให้" (v0.9.15) — ทั้งสองอันนี้เก็บไว้เป็น regression test แล้วที่ `tests/e2e/undo-finish.spec.ts` และ `tests/e2e/add-court.spec.ts`
+
+⚠️ E2E test สร้าง/แก้ข้อมูลจริงใน MongoDB ที่ `.env` ชี้ไป — เช็คให้แน่ใจว่าเป็น local Docker mongo เสมอ ห้ามรันตอน `.env` ชี้ไปที่ Atlas จริงเด็ดขาด (ดู Troubleshooting)
 
 ## How Match Generation Works
 
 เมื่อกดปุ่มจับคู่ ระบบจะ:
 
 1. ตรวจว่ามีผู้เล่นขั้นต่ำตามโหมดที่เลือก
-2. เรียงผู้เล่นตามจำนวนแมตช์จากน้อยไปมาก
-3. ภายในกลุ่มที่มีจำนวนแมตช์เท่ากัน แบ่งเป็น "คนที่ไม่ได้เพิ่งเล่น" (ขึ้นก่อน) และ "คนที่เพิ่งเล่นรอบล่าสุด" (ขึ้นหลัง) แล้วสุ่มแต่ละกลุ่มแยกกัน
-4. จัดผู้เล่นลงแต่ละคอร์ดตามจำนวนที่ต้องใช้ต่อแมตช์
-5. เมื่อกด `จบแมตช์` ค่อยเพิ่มสถิติ `matches` ให้ผู้เล่นที่อยู่ในคอร์ดนั้น ณ เวลาจบแมตช์
+2. เรียงผู้เล่นตามจำนวนแมตช์จากน้อยไปมาก แล้วภายในกลุ่มที่จำนวนแมตช์เท่ากัน เรียงตามเวลาที่เข้าคิว/พักล่าสุดจากเก่าไปใหม่ (`queuedAt`) — เท่ากันเป๊ะจริง ๆ ค่อยสุ่ม
+3. จัดผู้เล่นลงแต่ละคอร์ดตามจำนวนที่ต้องใช้ต่อแมตช์ (Doubles: จัดทีมโดยเลือก combination ที่ผู้เล่นเคยจับคู่กันมาก่อนน้อยที่สุด)
+4. เมื่อกด `จบแมตช์` (หรือ `ปิดคอร์ด` ระหว่างกำลังเล่น) เพิ่มสถิติ `matches`, บันทึกประวัติการจับคู่ (partner history), และรีเซ็ต `queuedAt` ให้ผู้เล่นที่อยู่ในคอร์ดนั้น ณ เวลานั้น
 
 ## Notes
 
 - UI หลักเป็นภาษาไทย
 - ฟอนต์หลักของทั้งโปรเจกต์ใช้ `Noto Sans Thai` ผ่าน `next/font`
 
-## Roadmap v2 (Supabase Integration)
+## Troubleshooting
 
-> feature ชุดนี้รอ implement เชื่อม Supabase backend
+- **⚠️ ก่อนรันคำสั่งที่ล้างข้อมูล (`dropDatabase()` หรือคล้ายกัน) ระหว่างทดสอบ ให้ `cat .env` เช็คก่อนเสมอว่า `MONGODB_URI` ยังชี้ `localhost` อยู่** — เคยเกิดเหตุการณ์ local `.env` ถูกแก้ให้ชี้ไป Atlas จริงตอน debug deploy แล้วลืมเปลี่ยนกลับ ทำให้การทดสอบไปกระทบ database จริงที่ deploy ใช้งานอยู่โดยไม่ตั้งใจ (ดู [docs/decision-log.md#adr-012](docs/decision-log.md#adr-012)) ค่า connection string ของ Atlas จริงควรอยู่ใน Vercel Environment Variables เท่านั้น ไม่ใส่ใน `.env` ของเครื่อง dev
+- **API route ตอบ 404 ทั้งที่ไฟล์ `route.ts` มีอยู่จริง** (โดยเฉพาะถ้าเพิ่งสลับไปมาระหว่าง `yarn build` กับ `yarn dev`) — `.next` cache ค้าง แก้ด้วย `rm -rf .next && yarn dev` ใหม่
+- **Deploy บน Vercel แล้ว MongooseServerSelectionError / connect ไม่ได้** — MongoDB Atlas ยัง whitelist เฉพาะ IP เดิมอยู่ แต่ Vercel serverless function ไม่มี IP คงที่ ต้องไปที่ Atlas → Security → Network Access → Add IP Address → **Allow Access From Anywhere (0.0.0.0/0)** (ยังต้องมี username/password ถูกต้องอยู่ดี ไม่ใช่เปิดโล่งไม่มีการป้องกัน)
+- **ข้อมูลไปโผล่ที่ database ชื่อ `test` แทนที่จะเป็น `badminton-matcher`** — connection string ที่ copy จากปุ่ม "Connect" ใน Atlas ไม่มีชื่อ database อยู่ในนั้น (เช่น `mongodb+srv://user:pass@cluster0.xxx.mongodb.net/?retryWrites=true...`) พอไม่ระบุมา MongoDB driver จะ default ไปที่ database ชื่อ `test` ให้เอง ต้องเติมชื่อ database เข้าไปเองก่อน `?` เช่น `.../badminton-matcher?retryWrites=true...`
+- **แก้ env var บน Vercel แล้วยังไม่มีผล** — Vercel ไม่ auto redeploy เมื่อ env var เปลี่ยน ต้องไปกด Redeploy เองที่แท็บ Deployments
+- **เปิดลิงก์ preview deployment (`*-git-*.vercel.app`) แล้วเด้งไป `vercel.com/sso-api`** — พฤติกรรมปกติของ Vercel, preview deployment ถูก protect ไว้ให้เห็นเฉพาะคนที่ login เข้าทีม Vercel เดียวกัน ถ้าจะแชร์ให้คนนอกทีมดู ต้อง deploy ขึ้น production domain แทน หรือเชิญเขาเข้าทีม Vercel
 
-- [ ] **Session / Room system** — สร้าง room แชร์ลิงก์ให้เพื่อนร่วม session เดียวกันได้ (แทน localStorage)
+## Roadmap v2 (MongoDB Backend)
+
+> แผนเดิมเคยระบุ Supabase ไว้ตรงนี้ แต่เปลี่ยนมาใช้ **MongoDB** แทนแล้ว (เหตุผล/รายละเอียดดู [docs/decision-log.md](docs/decision-log.md#adr-003)) แผนฉบับเต็มพร้อมลำดับเฟสอยู่ที่ [docs/roadmap.md](docs/roadmap.md) — สรุปสั้น ๆ ด้านล่าง
+
+- [x] **Backend foundation** — MongoDB + API + PIN auth + หน้าเว็บหลักย้ายมาเรียก API จริงหมดแล้ว
+- [ ] **Session / Room system** — ตอนนี้แชร์ session ได้ผ่าน session id + PIN เดียวกัน แต่ยังไม่มีลิงก์เชิญ/QR หรือ real-time sync ข้ามอุปกรณ์ (ดู Real-time Sync ด้านล่าง)
 - [ ] **Persistent Player List** — บันทึกรายชื่อผู้เล่นประจำไว้ใน DB ไม่ต้องพิมพ์ใหม่ทุกครั้ง
 - [ ] **Match History** — เก็บ log แมตช์ทั้งหมดต่อ session พร้อมดูย้อนหลังได้
 - [ ] **Player Stats** — สถิติสะสมรายคน เช่น จำนวนแมตช์ทั้งหมด, win/loss (ถ้ามีระบบบันทึกผล)
-- [ ] **Real-time Sync** — ใช้ Supabase Realtime ให้ทุกคนในห้องเห็นสถานะแมตช์พร้อมกัน
+- [ ] **Real-time Sync** — ให้ทุกคนในห้องเห็นสถานะแมตช์พร้อมกัน (เทคโนโลยียังไม่ confirm)
 - [ ] **Auth (optional)** — login เพื่อผูก player list กับบัญชี ไม่ผูกกับ browser

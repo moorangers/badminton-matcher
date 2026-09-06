@@ -1,0 +1,81 @@
+# Roadmap
+
+แผนฟีเจอร์แบ่งเฟส มาจากการวิเคราะห์ codebase ปัจจุบันเทียบกับ feature request วันที่ 2026-09-06 — แต่ละเฟสมี dependency ต่อกัน อ่านคู่กับ [decision-log.md](./decision-log.md) สำหรับเหตุผลของลำดับ
+
+สถานะที่ใช้: `not-started`, `in-progress`, `done`
+
+## Phase 0 — Backend Foundation
+
+**สถานะ:** done (2026-09-06) — เหลือแค่ deploy MongoDB จริงสำหรับ production เป็น follow-up นอก scope เดิม
+**ทำไมต้องทำ:** ทุกฟีเจอร์ multi-device (เช็คอินคนละเครื่อง, webboard, live score, QR check-in) เป็นไปไม่ได้บนสถาปัตยกรรม client-only + localStorage ปัจจุบัน — ดู [decision-log.md#adr-001](./decision-log.md)
+
+- [x] ตัดสินใจเรื่อง multi-tenant: 1 deployment ต่อ 1 ชมรม ([decision-log.md#adr-006](./decision-log.md))
+- [x] ตัดสินใจเรื่อง auth: PIN ต่อ session ([decision-log.md#adr-007](./decision-log.md))
+- [x] ตั้ง MongoDB connection layer — ใช้ container ที่มีอยู่แล้วในเครื่อง dev แทนสร้าง docker-compose ใหม่ ([decision-log.md#adr-008](./decision-log.md)) — `src/lib/db/mongodb.ts`
+- [x] Schema เริ่มต้น: `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` (mongoose models ใน `src/lib/db/models/`)
+- [x] PIN auth ขั้นต่ำ: ตั้ง PIN ตอนสร้าง session (`POST /api/sessions`), ตรวจสอบผ่าน `POST /api/sessions/:id/verify-pin` (`src/lib/auth/pin.ts`, bcrypt hash)
+- [x] API Routes พื้นฐาน: `GET/POST /api/sessions`, `POST /api/sessions/:id/verify-pin`, `GET/POST /api/sessions/:id/players` — ทดสอบ end-to-end กับ MongoDB จริงแล้ว (สร้าง session, verify pin ถูก/ผิด, เพิ่มผู้เล่น, กันชื่อซ้ำ case-insensitive)
+- [x] API สำหรับ `matches`: `GET/POST /api/sessions/:id/matches`, `PATCH /api/sessions/:id/matches/:matchId` — บังคับกฎ 1 คนไม่อยู่ 2 แมตช์พร้อมกัน, 1 คอร์ดมีได้แค่ 1 แมตช์ที่ยังไม่จบ, `done` จะ bump `matchesPlayedInSession` + partner history ให้อัตโนมัติ (ทดสอบ end-to-end กับ MongoDB จริงแล้ว)
+- [x] API สำหรับ `partnerHistory`: `GET /api/sessions/:id/partner-history` (resolve ชื่อผู้เล่นคืนมาด้วย, เขียนได้ทางเดียวผ่าน side-effect ตอนจบแมตช์เท่านั้น ไม่มี endpoint เขียนตรง)
+- [x] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — เสร็จแล้ว (2026-09-06) รวม session bootstrap (สร้าง/PIN gate), algorithm การจับคู่ยังอยู่ฝั่ง client เหมือนเดิม (อ่าน/เขียนผ่าน API แทน localStorage), ลบ `useLocalStorage.ts` ที่ไม่ใช้แล้วออก, ทดสอบ end-to-end ผ่าน Playwright จริง (สร้าง session → เพิ่มผู้เล่น → จับคู่ → เริ่ม/จบแมตช์ → auto-fill → substitute → ปิดคอร์ด → reload+PIN แล้วข้อมูลยังอยู่ครบ) ไม่มี console error
+- [x] Deploy MongoDB จริงสำหรับ production — ใช้ MongoDB Atlas, deploy ผ่าน Vercel (preview branch ทดสอบแล้วใช้งานได้ 2026-09-06) ต้องเปิด Atlas Network Access เป็น `0.0.0.0/0` เพราะ Vercel serverless ไม่มี IP คงที่ และต้องเติมชื่อ database ใน connection string เอง (ไม่งั้น driver จะ default ไปที่ database `test`) — รายละเอียดดู README ส่วน Troubleshooting
+
+## Phase 1 — แก้ Matching Fairness + Court Merge
+
+**สถานะ:** done (2026-09-06) — auto-trigger ตัดสินใจไม่ทำแล้ว ใช้ manual ล้วนตามที่ผู้ใช้ยืนยัน (ดู [decision-log.md#adr-010](./decision-log.md))
+**Dependency:** ไม่ต้องรอ Phase 0 เสร็จ (เป็น pure logic) — bundle 2 ฟีเจอร์นี้เพราะอยู่ใน matching engine เดียวกัน (ดู [decision-log.md#adr-005](./decision-log.md))
+
+- [x] เพิ่ม `queuedAt` เป็น tie-breaker รองจากจำนวนแมตช์ (คนรอนานกว่าได้คิวก่อน) — แก้ปัญหา "มาคอร์สไม่พร้อมกัน อยากแฟร์กับคนมาก่อน"
+- [x] เพิ่ม partner-history penalty ตอนสุ่มจับคู่ — แก้ปัญหา "คู่แทบไม่เปลี่ยนเลย"
+- [x] ปุ่ม "ปิดคอร์ด/รวมคอร์ด" แบบ manual — คอร์ดที่ถูกปิด: match ที่กำลังเล่นจบทันที คนไปรวมคิวคอร์ดที่เหลือ (แก้ปัญหา "จองคอร์ด 1hr/2hr")
+- [x] ~~auto-trigger รวมคอร์ดตามเวลาจองจริง~~ — **ตัดสินใจไม่ทำ** (2026-09-06) manual ล้วนพอแล้วสำหรับตอนนี้ ดูเหตุผล/ทางเลือกที่พิจารณาใน ADR-010
+- รายละเอียด logic ปัจจุบัน + ข้อจำกัดที่รู้อยู่แล้ว ดู [matching-algorithm.md](./matching-algorithm.md)
+
+## Phase 2 — เช็คอิน 2 ขั้น + QR Self Check-in
+
+**สถานะ:** done (2026-09-06) — ยกเว้น rate limiting จริงที่ยังไม่ทำ (ดูหมายเหตุด้านล่าง)
+**Dependency:** Phase 0 (ต้อง multi-device เห็น session เดียวกัน) ✅
+
+- [x] แยกสถานะผู้เล่น: `registered` → `checked_in` → เข้า pool สุ่มได้ — บังคับที่ทั้ง client (`toEligiblePlayers` กรอง `registered` ออกจาก pool/roster) และ server (`POST /matches` reject ถ้ามีผู้เล่น status `registered`)
+- [x] หน้าเช็คอินสำหรับผู้เล่น (มือถือตัวเอง) — public page `/checkin/[sessionId]` ไม่ต้องมี PIN รองรับทั้ง "ลงชื่อล่วงหน้า" และ "เช็คอินตอนถึงคอร์ด" ในหน้าเดียว
+- [x] QR code ต่อ session ชี้ไปหน้า public form — สร้าง client-side ด้วย `qrcode` package แสดงในหน้า dashboard (PIN-gated) พร้อมลิงก์ copy ได้
+- [x] เพิ่ม endpoint สาธารณะ (ไม่มี PIN): `POST /api/sessions/:id/register` (ลงชื่อล่วงหน้า), `POST /api/sessions/:id/checkin` (เช็คอิน — รองรับทั้งคนที่เคยลงชื่อไว้และ walk-in ที่ไม่เคยลงทะเบียน, idempotent ถ้าเช็คอินซ้ำ)
+- [x] แอดมินเช็คอินแทนได้จาก dashboard (สำหรับคนไม่มีมือถือ) ผ่านปุ่มในส่วน "รอเช็คอิน"
+- [ ] **กัน spam/ชื่อมั่ว แบบเต็มรูปแบบยังไม่ทำ** — มีแค่ validation พื้นฐาน (จำกัดความยาวชื่อ 40 ตัวอักษร, จำกัดจำนวนผู้เล่นต่อ session ไม่เกิน 60 คน `MAX_SESSION_PLAYERS`) endpoint สาธารณะยังไม่มี rate limiting ตาม IP จริง เพราะต้องพึ่ง infra เพิ่ม (Vercel KV/Upstash หรือคล้ายกัน) — เป็นความเสี่ยงที่รู้ไว้ ไม่ใช่ blocker
+
+## Phase 3 — Webboard / Post Report
+
+**สถานะ:** done (2026-09-06) — เลือก **Vercel Blob** เป็น file storage (ดู [decision-log.md#adr-011](./decision-log.md))
+**Dependency:** Phase 0 ✅
+
+- [x] โพสต์ข้อความ + รูปภาพ — `POST /api/posts` (สร้าง), `GET /api/posts` (list แบบ cursor pagination), `DELETE /api/posts/:postId` — เก็บเป็น feed เดียวทั้ง deployment ไม่ผูกกับ session ใดโดยเฉพาะ (`sessionId` เป็นแค่ reference เผื่ออยากรู้ว่าโพสต์ตอนไหน)
+- [x] หน้า feed แสดงโพสต์ย้อนหลัง — public page `/board` ไม่ต้องมี PIN (ให้ทั้งชมรมดูได้ ไม่ใช่แค่คนมี PIN)
+- [x] โพสต์/ลบโพสต์ได้จากหน้า `/board` โดยตรง (ย้ายมาจากการ์ดในหน้า dashboard เมื่อ 2026-09-06 — dashboard เหลือแค่ลิงก์เข้าหน้านี้ในเมนูบนสุด) ไม่ต้องมี PIN ทั้งโพสต์และลบ เพราะ `POST /api/posts`/`DELETE /api/posts/:postId` ไม่ enforce PIN ที่ server อยู่แล้ว (เหมือนทุก endpoint อื่นในโปรเจกต์นี้) — สอดคล้องกับที่ webboard ตั้งใจให้ทั้งชมรมโพสต์ได้ ไม่ใช่แค่แอดมิน
+- [x] อัปโหลดรูปตรงจากเบราว์เซอร์ไปที่ Vercel Blob เลย (ไม่ผ่าน server ก่อน) เพื่อเลี่ยง serverless request body size limit (~4.5MB) ที่รูปจากมือถือมักเกิน
+- [x] Validation พื้นฐาน: จำกัด 6 รูป/โพสต์, 10MB/รูป, เฉพาะ jpeg/png/webp/heic
+- [ ] **ยังไม่ได้ทดสอบการอัปโหลดรูปจริงกับ Vercel Blob** — ต้อง enable Blob storage ในโปรเจกต์ Vercel ก่อน (ดู README ส่วน Troubleshooting) ทดสอบแล้วแค่ path โพสต์ข้อความล้วนกับ path ที่ไม่มี token แล้ว error สุภาพ (ไม่ crash)
+
+## Phase 4 — ระบบนับคะแนน + Live Scoreboard
+
+**สถานะ:** done (2026-09-06) — เลือก **polling ทุก 2 วินาที** เป็น realtime layer, นับคะแนนแบบ **เกมเดียว** (ไม่ track best-of-3) ดู [decision-log.md#adr-013](./decision-log.md)
+**Dependency:** Phase 0 ✅
+
+- [x] UI นับคะแนนต่อแมตช์ — ปุ่ม +/- ต่อทีมบนการ์ดแมตช์ในหน้า dashboard, `POST /api/sessions/:id/matches/:matchId/score` (atomic `$inc` กัน race condition ตอนกดรัว ๆ — เจอบั๊กจริงระหว่างทดสอบและแก้แล้ว), คำนวณผู้ชนะเกมอัตโนมัติ (win-by-2, cap ที่ targetScore+9) ผ่าน `getGameWinner()` ใน `matchLifecycle.ts`
+- [x] **คะแนนเป้าหมายต่อเกมปรับได้** (ไม่ fix ที่ 21) — `Session.targetScore` ตั้งได้ตอนสร้าง session, หน้า pre-game, และ "ปรับรอบถัดไป" (มี preset 11/15/21 + กำหนดเองผ่านช่องกรอกตัวเลข, default 11) แต่ละแมตช์เก็บ snapshot ของตัวเอง เปลี่ยนกลางเกมไม่กระทบแมตช์ที่กำลังเล่นอยู่ (ดู [decision-log.md#adr-014](./decision-log.md))
+- [x] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ — public page `/scoreboard/[sessionId]` ไม่ต้องมี PIN, poll ทุก 2 วินาที, ตัวอักษรใหญ่อ่านง่ายจากระยะไกล
+- [ ] ยังไม่ทำ: multi-game (best-of-3) tracking — นับแค่เกมเดียวต่อแมตช์ในตอนนี้ ถ้าจะทำ best-of-3 ค่อยว่ากันตอน Phase 5 (tournament) ที่น่าจะต้องการจริง ๆ
+
+## Phase 5 — Tournament Mode
+
+**สถานะ:** not-started
+**Dependency:** อิสระจากเฟสอื่น (ใช้ engine คนละส่วนกับ casual matching) — Phase 4 (scoring) เสร็จแล้ว ✅ แต่ระบบคะแนนตอนนี้เป็นเกมเดียว ถ้า tournament ต้องการ best-of-3 ต้องขยายเพิ่ม
+
+- [ ] สร้างทัวร์นาเมนต์ ประเภทเดี่ยว/คู่
+- [ ] เลือกรูปแบบสาย: single elimination / double elimination / round robin
+- [ ] Bracket generation + จัดคอร์ดต่อแมตช์
+- [ ] เชื่อมกับ scoring (Phase 4) ถ้าเสร็จแล้ว
+
+## ฟีเจอร์ที่เสนอเพิ่ม (ยังไม่จัดลำดับ — รอผู้ใช้ prioritize)
+
+- LINE OA / LINE LIFF สำหรับเช็คอินและดู live score (เข้ากับ target user คนไทยมากกว่าทำ auth เอง)
+- Player profile ข้ามหลาย session (สถิติมาบ่อยแค่ไหน, MVP) — เก็บได้แทบฟรีถ้า Phase 0 มี persistent roster แล้ว
