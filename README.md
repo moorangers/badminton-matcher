@@ -103,6 +103,14 @@ yarn dev
 
 เปิดเบราว์เซอร์ที่ `http://localhost:3000`
 
+### Backend (Phase 0 — เริ่ม implement แล้ว)
+
+หน้าเว็บหลักยังใช้ localStorage เหมือนเดิม แต่เริ่มมี API routes ที่ต่อ MongoDB จริงแล้ว (`/api/sessions`, `/api/sessions/:id/verify-pin`, `/api/sessions/:id/players`) รายละเอียดดู [docs/roadmap.md](docs/roadmap.md) และ [docs/database-design.md](docs/database-design.md)
+
+1. ต้องมี MongoDB รันอยู่แล้ว (local container หรือ Atlas ก็ได้ — โปรเจกต์นี้ไม่มี docker-compose ของตัวเอง เพราะ dev เครื่องนี้ใช้ container ที่มีอยู่แล้วร่วมกับโปรเจกต์อื่น ดู [docs/decision-log.md#adr-008](docs/decision-log.md#adr-008))
+2. คัดลอก `.env.example` เป็น `.env` แล้วปรับ `MONGODB_URI` ให้ชี้ไปที่ MongoDB ของตัวเอง (ใช้ database name แยกจากโปรเจกต์อื่น)
+3. `yarn dev` ตามปกติ แล้วลองยิง `GET /api/health` เพื่อเช็คว่าเชื่อม MongoDB สำเร็จ
+
 ## Available Scripts
 
 - `yarn dev` รันโหมดพัฒนา

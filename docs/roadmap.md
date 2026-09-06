@@ -6,14 +6,18 @@
 
 ## Phase 0 — Backend Foundation
 
-**สถานะ:** not-started
+**สถานะ:** in-progress (foundation ทำงานได้แล้ว 2026-09-06 — sessions + players ผ่าน MongoDB จริง, ยังไม่มี matches/partnerHistory endpoints และยังไม่ได้ย้าย UI เดิมมาเรียก API)
 **ทำไมต้องทำ:** ทุกฟีเจอร์ multi-device (เช็คอินคนละเครื่อง, webboard, live score, QR check-in) เป็นไปไม่ได้บนสถาปัตยกรรม client-only + localStorage ปัจจุบัน — ดู [decision-log.md#adr-001](./decision-log.md)
 
-- [ ] ตั้ง MongoDB (Atlas หรืออื่น) + connection layer
-- [ ] Schema เริ่มต้น: `sessions`, `players`, `sessionPlayers`, `matches` (ดู [database-design.md](./database-design.md))
-- [ ] API Routes/Route Handlers พื้นฐาน (CRUD players/matches/session)
-- [ ] Auth ขั้นต่ำ (แยก admin ที่กดจับคู่/จบแมตช์ ออกจากผู้เล่นทั่วไป) — วิธีไหนยังไม่ confirm (ดู open question ใน [architecture-design.md](./architecture-design.md))
-- [ ] ตัดสินใจเรื่อง multi-tenant (`Club`) ก่อนเริ่ม schema จริง
+- [x] ตัดสินใจเรื่อง multi-tenant: 1 deployment ต่อ 1 ชมรม ([decision-log.md#adr-006](./decision-log.md))
+- [x] ตัดสินใจเรื่อง auth: PIN ต่อ session ([decision-log.md#adr-007](./decision-log.md))
+- [x] ตั้ง MongoDB connection layer — ใช้ container ที่มีอยู่แล้วในเครื่อง dev แทนสร้าง docker-compose ใหม่ ([decision-log.md#adr-008](./decision-log.md)) — `src/lib/db/mongodb.ts`
+- [x] Schema เริ่มต้น: `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` (mongoose models ใน `src/lib/db/models/`)
+- [x] PIN auth ขั้นต่ำ: ตั้ง PIN ตอนสร้าง session (`POST /api/sessions`), ตรวจสอบผ่าน `POST /api/sessions/:id/verify-pin` (`src/lib/auth/pin.ts`, bcrypt hash)
+- [x] API Routes พื้นฐาน: `GET/POST /api/sessions`, `POST /api/sessions/:id/verify-pin`, `GET/POST /api/sessions/:id/players` — ทดสอบ end-to-end กับ MongoDB จริงแล้ว (สร้าง session, verify pin ถูก/ผิด, เพิ่มผู้เล่น, กันชื่อซ้ำ case-insensitive)
+- [ ] API สำหรับ `matches` และ `partnerHistory` (ยังไม่ implement — schema พร้อมแล้วแต่ยังไม่มี endpoint)
+- [ ] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — งานก้อนใหญ่ที่ยังไม่เริ่ม
+- [ ] Deploy MongoDB จริงสำหรับ production (ตอนนี้ dev ใช้ container ในเครื่องเท่านั้น ยังไม่มีแผน production DB)
 
 ## Phase 1 — แก้ Matching Fairness + Court Merge
 

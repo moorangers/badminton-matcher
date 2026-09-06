@@ -6,6 +6,30 @@
 
 ---
 
+## ADR-008 — Dev เชื่อม MongoDB ผ่าน container ที่มีอยู่แล้วในเครื่อง ไม่สร้าง docker-compose ใหม่
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** ตอนแรกวางแผนสร้าง `docker-compose.yml` แยกสำหรับโปรเจกต์นี้ แต่พบว่าเครื่อง dev มี container ชื่อ `mongodb` (image `mongo:latest`, user/pass `root`/`password`) รันอยู่แล้วที่ port 27017 ใช้ร่วมกันหลายโปรเจกต์ ถ้าสร้าง compose ใหม่จะชน port กัน
+- **Decision:** ใช้ container ที่มีอยู่แล้ว เชื่อมด้วย database แยกชื่อ `badminton-matcher` (คนละ database จากโปรเจกต์อื่นบน container เดียวกัน เช่น `obstack`) ผ่าน `.env` (ไม่ใช่ `.env.local`) ที่มี `MONGODB_USERNAME`, `MONGODB_PASSWORD`, `MONGODB_URI`
+- **Consequences:** ไม่มี `docker-compose.yml`/`db:up`/`db:down` script ในโปรเจกต์นี้ — เอกสาร setup ต้องบอกให้ผู้เล่นคนอื่นที่ clone repo นี้รู้ว่าต้องมี MongoDB รันเองอยู่แล้ว (local container หรือ Atlas) ก่อน ไม่ได้ auto-provision ให้ — ถ้าย้ายไป production จริงจะใช้ MongoDB Atlas แยกต่างหาก ไม่เกี่ยวกับ container นี้
+
+## ADR-007 — Auth ขั้นต่ำสำหรับ Phase 0 คือ PIN ต่อ session
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** ต้องแยกสิทธิ์แอดมิน (กดจับคู่/จบแมตช์/ปิดคอร์ด) ออกจากผู้เล่นทั่วไป โดยไม่ทำให้ setup ยุ่งยากเกินความจำเป็นสำหรับ use case จริง (คนเดียว/ไม่กี่คนคุมหน้าคอร์ด)
+- **Decision:** ใช้ PIN ต่อ session แทน email/password หรือ LINE Login — ตั้ง PIN ตอนเปิด session ใหม่ ใครมี PIN กดจัดการได้
+- **Consequences:** ไม่ต้องมี user account/database ของผู้ใช้แยกต่างหากใน Phase 0 ลด scope ลงมาก แต่ต้องคิดเรื่อง PIN เก็บที่ไหน (hash ใน `sessions` collection), ส่งให้แอดมินยังไง (แสดงบนจอตอนสร้าง session), และ rate-limit การเดา PIN
+
+## ADR-006 — ไม่ทำ multi-tenant (`Club`) ใน Phase 0
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** [database-design.md](./database-design.md) เดิมเสนอให้มี `clubId` ในแทบทุก collection เผื่อรองรับหลายชมรมในระบบเดียว แต่ยังไม่มี use case จริงที่ต้องการแบบนั้นตอนนี้
+- **Decision:** ทำแบบ 1 deployment ต่อ 1 ชมรมไปก่อน ไม่ใส่ `clubId`/`clubs` collection ใน Phase 0
+- **Consequences:** Schema เรียบง่ายขึ้นมาก (ดูฉบับปรับใน [database-design.md](./database-design.md)) — ถ้าอนาคตต้องรองรับหลายชมรมจริง จะต้อง migrate เพิ่ม `clubId` ทีหลัง ซึ่งทำได้แต่ต้องแก้ query/index ที่มีอยู่แล้วทั้งหมด
+
 ## ADR-005 — ลำดับความสำคัญ Phase 1 คือแก้ logic จับคู่ก่อน
 
 - **วันที่:** 2026-09-06

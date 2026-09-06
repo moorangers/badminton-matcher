@@ -50,12 +50,15 @@ flowchart TD
     Realtime -.push.-> DisplayUI
 ```
 
-จุดที่ยังไม่ตัดสินใจ (ต้อง confirm ก่อนเริ่ม Phase 0 จริง):
+จุดที่ตัดสินใจแล้ว (2026-09-06):
 
-- **Auth**: ใครมีสิทธิ์กด "จับคู่/จบแมตช์/รวมคอร์ด" (admin) เทียบกับผู้เล่นทั่วไปที่แค่เช็คอิน/ดูจอ — จะใช้ระบบ auth แบบไหน (NextAuth + email/password, magic link, LINE Login, หรือแค่ PIN ต่อ session)
-- **Realtime**: live scoreboard (ฟีเจอร์ข้อ 7) ต้องมี mechanism push ข้อมูลสด — เลือกระหว่าง 3rd-party realtime service, polling ถี่ ๆ, หรือ self-host WebSocket
-- **File storage**: รูปภาพ webboard เก็บที่ไหน (Vercel Blob / Cloudinary / S3 / MongoDB GridFS)
-- **Multi-tenancy**: จะรองรับหลายชมรมในระบบเดียว (`Club` entity) หรือ 1 deployment ต่อ 1 ชมรมพอ — ส่งผลกับ schema ทุกตัวใน [database-design.md](./database-design.md)
+- **Auth**: PIN ต่อ session — ดู [decision-log.md#adr-007](./decision-log.md)
+- **Multi-tenancy**: 1 deployment ต่อ 1 ชมรม ไม่มี `Club` entity ใน Phase 0 — ดู [decision-log.md#adr-006](./decision-log.md)
+
+จุดที่ยังไม่ตัดสินใจ (ต้อง confirm ก่อนถึงเฟสที่เกี่ยวข้อง):
+
+- **Realtime**: live scoreboard (Phase 4) ต้องมี mechanism push ข้อมูลสด — เลือกระหว่าง 3rd-party realtime service, polling ถี่ ๆ, หรือ self-host WebSocket
+- **File storage**: รูปภาพ webboard (Phase 3) เก็บที่ไหน (Vercel Blob / Cloudinary / S3 / MongoDB GridFS)
 
 ## แนวทาง Module ใหม่ (เสนอ)
 

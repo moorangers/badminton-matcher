@@ -1,34 +1,25 @@
 # Database Design (ฉบับร่าง — รอ Phase 0)
 
 > สถานะ: **draft/proposed** ยังไม่ได้ implement จริง เขียนไว้ล่วงหน้าเพื่อให้เห็นภาพว่าฟีเจอร์ที่คุยกันจะแมปกับ schema ยังไง จะปรับเมื่อเริ่มลงมือ Phase 0 จริง — เลือก MongoDB ตาม [decision-log.md#adr-003](./decision-log.md)
+>
+> **อัปเดต 2026-09-06:** ตัดสินใจแล้วว่าเป็น **1 deployment ต่อ 1 ชมรม** (ไม่มี multi-tenant/`clubId`) และ auth แอดมินใช้ **PIN ต่อ session** — ดู [decision-log.md#adr-006](./decision-log.md) และ [#adr-007](./decision-log.md) ปรับ schema ด้านล่างตามนี้แล้ว
 
-## คำถามที่ต้องตอบก่อนเริ่ม implement จริง
+## คำถามที่ยังต้องตอบก่อนเริ่ม implement จริง
 
-1. รองรับ multi-tenant (`Club`) ตั้งแต่วันแรก หรือ 1 deployment ต่อ 1 ชมรมพอในตอนนี้? (ส่งผลกับทุก collection ด้านล่างว่าต้องมี `clubId` หรือไม่)
-2. `Player` เป็น roster ถาวรของชมรม (ชื่อเดิมกลับมาเล่นซ้ำได้โดยไม่ต้องพิมพ์ใหม่) หรือสร้างใหม่ทุก session?
-3. เก็บผลแพ้ชนะ (win/loss/score) ของ casual play ด้วยไหม หรือจะนับคะแนนเฉพาะ tournament mode เท่านั้น?
+1. `Player` เป็น roster ถาวรของชมรม (ชื่อเดิมกลับมาเล่นซ้ำได้โดยไม่ต้องพิมพ์ใหม่) หรือสร้างใหม่ทุก session?
+2. เก็บผลแพ้ชนะ (win/loss/score) ของ casual play ด้วยไหม หรือจะนับคะแนนเฉพาะ tournament mode เท่านั้น?
 
 ## Collections (ฉบับร่าง)
-
-### `clubs` (ถ้าตัดสินใจรองรับ multi-tenant)
-
-```ts
-{
-  _id: ObjectId,
-  name: string,
-  createdAt: Date,
-}
-```
 
 ### `sessions` — 1 session คือ 1 วันที่มาเล่น (แทนที่แนวคิด "ทั้งแอป = 1 session" ของเดิม)
 
 ```ts
 {
   _id: ObjectId,
-  clubId: ObjectId,
   date: Date,
   mode: 'singles' | 'doubles',
   status: 'open' | 'closed',
+  adminPinHash: string,     // PIN ที่แอดมินตั้งตอนสร้าง session (hash ไว้ ไม่เก็บ plain text)
   createdAt: Date,
 }
 ```
@@ -47,12 +38,11 @@
 }
 ```
 
-### `players` — roster ต่อชมรม (persistent ข้ามหลาย session ถ้าตอบคำถามข้อ 2 ว่า "ใช่")
+### `players` — roster ของชมรม (persistent ข้ามหลาย session ถ้าตอบคำถามข้อ 1 ว่า "ใช่")
 
 ```ts
 {
   _id: ObjectId,
-  clubId: ObjectId,
   name: string,
   createdAt: Date,
   // สถิติสะสมข้ามทุก session (ถ้าต้องการ)
@@ -108,7 +98,6 @@
 ```ts
 {
   _id: ObjectId,
-  clubId: ObjectId,
   sessionId?: ObjectId,
   authorId: ObjectId,        // admin/member ที่โพสต์
   text: string,
@@ -123,7 +112,6 @@
 // tournaments
 {
   _id: ObjectId,
-  clubId: ObjectId,
   name: string,               // เช่น "กีฬาสี 2026"
   type: 'singles' | 'doubles',
   bracketType: 'single_elimination' | 'double_elimination' | 'round_robin',
@@ -150,4 +138,4 @@
 - `sessionPlayers`: `{ sessionId: 1, status: 1 }` (query pool คนพร้อมสุ่มบ่อย)
 - `matches`: `{ sessionId: 1, status: 1 }`, `{ sessionId: 1, court: 1 }`
 - `partnerHistory`: unique `{ sessionId: 1, pairKey: 1 }`
-- `players`: unique `{ clubId: 1, name: 1 }` (กันชื่อซ้ำในชมรมเดียวกัน เหมือน validation เดิมที่มีอยู่แล้วใน localStorage version)
+- `players`: unique `{ name: 1 }` (กันชื่อซ้ำในระบบ เหมือน validation เดิมที่มีอยู่แล้วใน localStorage version)

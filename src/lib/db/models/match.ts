@@ -1,0 +1,24 @@
+import mongoose, { Schema, type InferSchemaType } from 'mongoose';
+
+const matchSchema = new Schema({
+  sessionId: { type: Schema.Types.ObjectId, ref: 'Session', required: true },
+  court: { type: Number, required: true },
+  mode: { type: String, enum: ['singles', 'doubles'], required: true },
+  teamA: [{ type: Schema.Types.ObjectId, ref: 'SessionPlayer', required: true }],
+  teamB: [{ type: Schema.Types.ObjectId, ref: 'SessionPlayer', required: true }],
+  status: {
+    type: String,
+    enum: ['ready', 'playing', 'done'],
+    required: true,
+    default: 'ready',
+  },
+  startedAt: { type: Date },
+  finishedAt: { type: Date },
+});
+
+matchSchema.index({ sessionId: 1, status: 1 });
+matchSchema.index({ sessionId: 1, court: 1 });
+
+export type MatchDocument = InferSchemaType<typeof matchSchema>;
+export const MatchModel =
+  mongoose.models.Match ?? mongoose.model('Match', matchSchema);
