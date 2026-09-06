@@ -4,7 +4,7 @@
 
 พัฒนาด้วย Next.js (App Router) + TypeScript + Tailwind CSS + ชุดคอมโพเนนต์แนว shadcn/ui
 
-> Current Version: v0.8.0
+> Current Version: v0.9.0
 
 ## การอัปเดตเวอร์ชัน (Versioning Workflow)
 
@@ -45,6 +45,7 @@
 - **ลบผู้เล่นระหว่างเกม** — ถ้าผู้เล่นไม่ได้อยู่ใน active match จะลบได้ทันที และ regenerate คู่ถัดไป / ถ้าอยู่ใน active match จะเปิด flow เปลี่ยนตัวก่อน
 - **Substitute Player** — กดไอคอน `⇄` ที่ชื่อผู้เล่นใน court card ได้โดยตรง ระบบจะ confirm แล้วสุ่มคนพักมาแทนอัตโนมัติ ผู้เล่นเดิมจะ `ไปพัก` (ไม่ถูกลบจากรายชื่อ)
 - **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพจากหน้า dashboard (เช่น รายงานว่าวันนี้มากี่คน) รูปอัปโหลดตรงไปที่ Vercel Blob จากเบราว์เซอร์เลย ใครก็ดู feed ได้ที่หน้า `/board` โดยไม่ต้องมี PIN
+- **นับคะแนน + Live Scoreboard** — ปุ่ม +/- คะแนนต่อทีมบนการ์ดแมตช์ (นับเกมเดียวถึง 21 แต้ม win-by-2 cap 30 ตามกติกาแบดมินตัน) พร้อมหน้าจอคะแนนสดสาธารณะที่ `/scoreboard/[sessionId]` (ไม่ต้องมี PIN, อัปเดตทุก 2 วินาที) เอาไปเปิดจอทีวี/โปรเจกเตอร์ข้างคอร์ดได้
 - ปุ่มรีเซ็ตสถิติ (ล้างแมตช์/สถิติ แต่คง session ไว้) และปุ่มออกจาก session (ลืม session บนเครื่องนี้ ไม่ลบข้อมูลบนเซิร์ฟเวอร์)
 - **บันทึกลง MongoDB จริง** — ผู้เล่น/แมตช์/สถิติ/partner history ทั้งหมดอยู่บนเซิร์ฟเวอร์ผูกกับ session id ไม่ใช่ browser เดียวอีกต่อไป ปิด-เปิดหน้าใหม่ (ใส่ PIN ยืนยันอีกครั้ง) ข้อมูลยังอยู่ครบ
 - **ย้อนกลับล่าสุด (Undo)** — ปุ่ม `ย้อนกลับคอร์ดนี้` โผล่เฉพาะคอร์ดที่กด `จบแมตช์` ล่าสุดจริง ๆ เท่านั้น (ครั้งเดียว ไม่ใช่ stack หลายขั้น) ยกเลิกไม่ได้ถ้ามีคนถูกจัดลงแมตช์อื่นไปแล้วหลังจากนั้น
@@ -74,6 +75,7 @@ src/
     how-to-use/page.tsx      # in-app usage guide
     checkin/[sessionId]/page.tsx  # public self check-in page (no PIN)
     board/page.tsx           # public webboard feed (no PIN)
+    scoreboard/[sessionId]/page.tsx  # public live scoreboard display (no PIN, polls every 2s)
     api/
       health/route.ts
       players/[playerId]/route.ts
@@ -90,6 +92,7 @@ src/
       sessions/[id]/players/[sessionPlayerId]/route.ts
       sessions/[id]/matches/route.ts
       sessions/[id]/matches/[matchId]/route.ts
+      sessions/[id]/matches/[matchId]/score/route.ts        # +/- point scoring
       sessions/[id]/matches/[matchId]/substitute/route.ts
       sessions/[id]/matches/[matchId]/undo-finish/route.ts
       sessions/[id]/partner-history/route.ts
@@ -116,7 +119,7 @@ src/
       mongodb.ts            # connection singleton
       models/               # mongoose schemas (session, player, sessionPlayer, match, partnerHistory, post)
       services/
-        matchLifecycle.ts   # shared stat/partner-history bump+revert logic
+        matchLifecycle.ts   # shared stat/partner-history bump+revert logic, serializeMatch, getGameWinner
         sessionPlayers.ts   # shared add-player/find-by-name-or-id logic (admin + public register/checkin)
   types/
     styles.d.ts

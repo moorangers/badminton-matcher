@@ -6,6 +6,7 @@ import {
   findActiveMatchForPlayers,
   findActiveMatchForCourt,
   revertMatchFinishStats,
+  serializeMatch,
 } from '@/lib/db/services/matchLifecycle';
 
 export async function POST(
@@ -67,15 +68,5 @@ export async function POST(
   match.statsCounted = false;
   await match.save();
 
-  return NextResponse.json({
-    id: match._id.toString(),
-    court: match.court,
-    mode: match.mode,
-    teamA: match.teamA.map((playerId) => playerId.toString()),
-    teamB: match.teamB.map((playerId) => playerId.toString()),
-    status: match.status,
-    startedAt: match.startedAt ?? null,
-    finishedAt: match.finishedAt ?? null,
-    statsCounted: match.statsCounted,
-  });
+  return NextResponse.json(serializeMatch(match));
 }

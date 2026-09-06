@@ -17,6 +17,9 @@ const matchSchema = new Schema({
   // true ถ้า transition ไป 'done' ครั้งนี้ได้ bump matchesPlayedInSession/partnerHistory ไปแล้ว
   // (ต่างจาก close-court ที่จบแมตช์ status 'ready' โดยไม่นับสถิติ) — ใช้ตอน undo-finish
   statsCounted: { type: Boolean, required: true, default: false },
+  // คะแนนเกมปัจจุบัน (นับแต้มเดียว ไม่ track หลายเกมต่อแมตช์ — ดู ADR-013)
+  scoreA: { type: Number, required: true, default: 0, min: 0 },
+  scoreB: { type: Number, required: true, default: 0, min: 0 },
 });
 
 matchSchema.index({ sessionId: 1, status: 1 });

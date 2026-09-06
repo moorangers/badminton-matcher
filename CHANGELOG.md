@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.0 (2026-09-06)
+
+- **ระบบนับคะแนน + Live Scoreboard** — ปิด Phase 4
+- ปุ่ม +/- คะแนนต่อทีมบนการ์ดแมตช์แต่ละคอร์ด นับเกมเดียวตามกติกาแบดมินตัน (21 แต้ม win-by-2, cap 30) คำนวณผู้ชนะเกมอัตโนมัติ
+- หน้าจอคะแนนสดสาธารณะที่ `/scoreboard/[sessionId]` ไม่ต้องมี PIN อัปเดตทุก 2 วินาที (polling) ตัวอักษรใหญ่เหมาะเปิดจอทีวี/โปรเจกเตอร์
+- Endpoint ใหม่: `POST /api/sessions/:id/matches/:matchId/score`
+- **แก้บั๊กที่เจอระหว่างทดสอบ**: การนับคะแนนแบบเดิม (read-modify-write) มี race condition เมื่อกดปุ่มรัว ๆ ทำให้แต้มหายบางส่วน แก้เป็น atomic `$inc` แทน
+- เพิ่ม `serializeMatch`/`getGameWinner` กลางไว้ที่ `matchLifecycle.ts` ให้ทุก match endpoint ส่งค่าคะแนนออกมาสอดคล้องกัน
+
 ## v0.8.0 (2026-09-06)
 
 - **กระดานข่าว (Webboard)** — โพสต์ข้อความ+รูปภาพจากหน้า dashboard, feed สาธารณะที่ `/board` ไม่ต้องมี PIN

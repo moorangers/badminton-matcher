@@ -4,7 +4,10 @@ import { connectToDatabase } from '@/lib/db/mongodb';
 import { SessionModel } from '@/lib/db/models/session';
 import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
 import { MatchModel } from '@/lib/db/models/match';
-import { findActiveMatchForPlayers } from '@/lib/db/services/matchLifecycle';
+import {
+  findActiveMatchForPlayers,
+  serializeMatch,
+} from '@/lib/db/services/matchLifecycle';
 
 const PLAYERS_PER_TEAM: Record<'singles' | 'doubles', number> = {
   singles: 1,
@@ -28,19 +31,7 @@ export async function GET(
 
   const matches = await MatchModel.find(query).sort({ court: 1 }).lean();
 
-  return NextResponse.json(
-    matches.map((match) => ({
-      id: match._id.toString(),
-      court: match.court,
-      mode: match.mode,
-      teamA: match.teamA.map((playerId) => playerId.toString()),
-      teamB: match.teamB.map((playerId) => playerId.toString()),
-      status: match.status,
-      startedAt: match.startedAt ?? null,
-      finishedAt: match.finishedAt ?? null,
-      statsCounted: match.statsCounted,
-    })),
-  );
+  return NextResponse.json(matches.map((match) => serializeMatch(match)));
 }
 
 export async function POST(
@@ -151,16 +142,5 @@ export async function POST(
     { $set: { status: 'playing' } },
   );
 
-  return NextResponse.json(
-    {
-      id: match._id.toString(),
-      court: match.court,
-      mode: match.mode,
-      teamA: match.teamA.map((playerId) => playerId.toString()),
-      teamB: match.teamB.map((playerId) => playerId.toString()),
-      status: match.status,
-      statsCounted: match.statsCounted,
-    },
-    { status: 201 },
-  );
+  return NextResponse.json(serializeMatch(match), { status: 201 });
 }

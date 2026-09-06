@@ -2,7 +2,10 @@ import { NextResponse } from 'next/server';
 
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { MatchModel } from '@/lib/db/models/match';
-import { applyMatchFinishStats } from '@/lib/db/services/matchLifecycle';
+import {
+  applyMatchFinishStats,
+  serializeMatch,
+} from '@/lib/db/services/matchLifecycle';
 
 const VALID_STATUSES = ['ready', 'playing', 'done'];
 
@@ -46,15 +49,5 @@ export async function PATCH(
   match.status = nextStatus;
   await match.save();
 
-  return NextResponse.json({
-    id: match._id.toString(),
-    court: match.court,
-    mode: match.mode,
-    teamA: match.teamA.map((playerId) => playerId.toString()),
-    teamB: match.teamB.map((playerId) => playerId.toString()),
-    status: match.status,
-    startedAt: match.startedAt ?? null,
-    finishedAt: match.finishedAt ?? null,
-    statsCounted: match.statsCounted,
-  });
+  return NextResponse.json(serializeMatch(match));
 }

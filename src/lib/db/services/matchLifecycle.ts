@@ -8,6 +8,46 @@ type MatchDoc = HydratedDocument<MatchDocument>;
 
 const pairKeyFor = (ids: string[]) => [...ids].sort().join('_');
 
+/** Standard badminton single-game scoring: first to 21, must win by 2,
+ * hard cap at 30 (whoever reaches 30 wins outright regardless of margin). */
+export function getGameWinner(
+  scoreA: number,
+  scoreB: number,
+): 'A' | 'B' | null {
+  if (scoreA >= 30) return 'A';
+  if (scoreB >= 30) return 'B';
+  if (scoreA >= 21 && scoreA - scoreB >= 2) return 'A';
+  if (scoreB >= 21 && scoreB - scoreA >= 2) return 'B';
+  return null;
+}
+
+export const serializeMatch = (match: {
+  _id: { toString(): string };
+  court: number;
+  mode: string;
+  teamA: { toString(): string }[];
+  teamB: { toString(): string }[];
+  status: string;
+  startedAt?: Date | null;
+  finishedAt?: Date | null;
+  statsCounted: boolean;
+  scoreA: number;
+  scoreB: number;
+}) => ({
+  id: match._id.toString(),
+  court: match.court,
+  mode: match.mode,
+  teamA: match.teamA.map((playerId) => playerId.toString()),
+  teamB: match.teamB.map((playerId) => playerId.toString()),
+  status: match.status,
+  startedAt: match.startedAt ?? null,
+  finishedAt: match.finishedAt ?? null,
+  statsCounted: match.statsCounted,
+  scoreA: match.scoreA,
+  scoreB: match.scoreB,
+  gameWinner: getGameWinner(match.scoreA, match.scoreB),
+});
+
 /** Finds an active (non-done) match in this session that already contains
  * any of the given sessionPlayer ids — used to reject double-booking a
  * player into two matches at once. Pass `excludeMatchId` when editing an

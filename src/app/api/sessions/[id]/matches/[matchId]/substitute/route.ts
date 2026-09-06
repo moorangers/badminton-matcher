@@ -3,7 +3,10 @@ import { NextResponse } from 'next/server';
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { MatchModel } from '@/lib/db/models/match';
 import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
-import { findActiveMatchForPlayers } from '@/lib/db/services/matchLifecycle';
+import {
+  findActiveMatchForPlayers,
+  serializeMatch,
+} from '@/lib/db/services/matchLifecycle';
 
 export async function POST(
   request: Request,
@@ -99,12 +102,5 @@ export async function POST(
     { $set: { status: 'playing' } },
   );
 
-  return NextResponse.json({
-    id: match._id.toString(),
-    court: match.court,
-    mode: match.mode,
-    teamA: match.teamA.map((playerId) => playerId.toString()),
-    teamB: match.teamB.map((playerId) => playerId.toString()),
-    status: match.status,
-  });
+  return NextResponse.json(serializeMatch(match));
 }

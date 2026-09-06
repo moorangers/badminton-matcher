@@ -6,6 +6,15 @@
 
 ---
 
+## ADR-013 — Live scoreboard ใช้ polling (ไม่ใช้ Pusher/Ably), นับคะแนนแบบเกมเดียว
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** Phase 4 ต้องตัดสินใจ 2 เรื่อง: (1) realtime layer สำหรับ live scoreboard — polling ธรรมดา vs 3rd-party service (Pusher/Ably); (2) ระบบนับคะแนนควรซับซ้อนแค่ไหน — เกมเดียวถึง 21 แต้ม vs best-of-3 เกมแบบทัวร์นาเมนต์
+- **Decision:** เลือก polling ทุก 2 วินาที (ไม่ต้องสมัครบัญชี 3rd-party เพิ่ม ไม่ต้องกังวลเรื่อง Vercel serverless ไม่รองรับ WebSocket ค้างนาน ๆ) และเลือกนับคะแนนแบบ**เกมเดียว** (21 แต้ม, win-by-2, cap ที่ 30) ไม่ track หลายเกมต่อแมตช์
+- **Consequences:** หน้า `/scoreboard/[sessionId]` เห็นคะแนนช้ากว่าความเป็นจริงได้สูงสุด ~2 วินาที (ยอมรับได้สำหรับ casual play ไม่ใช่ broadcast มืออาชีพ) — ถ้าต้องการ best-of-3 (เช่นตอนทำ Phase 5 tournament) ต้องขยาย schema เพิ่ม (เก็บ array ของเกมที่จบไปแล้ว + ตัวนับเกมที่ชนะของแต่ละทีม) ไม่ใช่แค่ scoreA/scoreB ตัวเดียวแบบตอนนี้
+- **บั๊กที่เจอระหว่าง implement:** ตอนแรกใช้ pattern read-modify-write (`match.scoreA = match.scoreA + delta; await match.save()`) ซึ่งเจอ race condition จริงตอนทดสอบกดปุ่ม +1 รัว ๆ (3 requests concurrent กัน ทำให้ผลรวมคะแนนหายไปบางส่วน) แก้เป็น atomic `$inc` ผ่าน `findOneAndUpdate` แทน (ฝั่งลบคะแนนใช้ filter `{$gt: 0}` กันติดลบในตัว query เดียวกันแบบ atomic)
+
 ## ADR-012 — Local `.env` ต้องชี้ local Docker mongo เสมอ ไม่ใช้ Atlas จริงตอน dev
 
 - **วันที่:** 2026-09-06

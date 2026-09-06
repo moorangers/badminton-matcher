@@ -4,8 +4,10 @@ import {
   CheckCircle2,
   Coffee,
   GitMerge,
+  Minus,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   SlidersHorizontal,
   Swords,
@@ -25,6 +27,9 @@ export interface Match {
   teamA: Player[];
   teamB: Player[];
   status: MatchStatus;
+  scoreA?: number;
+  scoreB?: number;
+  gameWinner?: 'A' | 'B' | null;
 }
 
 interface MatchBoardProps {
@@ -38,6 +43,7 @@ interface MatchBoardProps {
   onFinish?: (court: number) => void;
   onCloseCourt?: (court: number) => void;
   onSubstitutePlayer?: (playerId: string) => void;
+  onScoreChange?: (court: number, team: 'A' | 'B', delta: 1 | -1) => void;
   undoableCourtId?: number;
   onUndoCourtFinish?: (court: number) => void;
   onOpenPlanEditor?: () => void;
@@ -78,6 +84,7 @@ export const MatchBoard = ({
   onFinish,
   onCloseCourt,
   onSubstitutePlayer,
+  onScoreChange,
   undoableCourtId,
   onUndoCourtFinish,
   onOpenPlanEditor,
@@ -159,20 +166,45 @@ export const MatchBoard = ({
                   showSubstitute={showActions}
                   onSubstitute={onSubstitutePlayer}
                 />
-                <div className="flex flex-col items-center">
-                  <div
-                    className={cn(
-                      'flex h-9 w-9 items-center justify-center rounded-full transition-smooth',
-                      m.status === 'playing'
-                        ? 'bg-destructive text-destructive-foreground shadow-soft'
-                        : 'bg-muted text-muted-foreground shadow-soft',
-                    )}
-                  >
-                    <Swords className="h-4 w-4" />
-                  </div>
-                  <span className="mt-1 font-display text-[10px] font-extrabold tracking-widest text-secondary">
+                <div className="flex flex-col items-center gap-1">
+                  {m.status !== 'done' && m.scoreA !== undefined && m.scoreB !== undefined ? (
+                    <div className="flex items-center gap-2">
+                      <ScoreControl
+                        value={m.scoreA}
+                        disabled={!showActions}
+                        onIncrement={() => onScoreChange?.(m.court, 'A', 1)}
+                        onDecrement={() => onScoreChange?.(m.court, 'A', -1)}
+                      />
+                      <span className="font-display text-xs font-extrabold text-muted-foreground">
+                        :
+                      </span>
+                      <ScoreControl
+                        value={m.scoreB}
+                        disabled={!showActions}
+                        onIncrement={() => onScoreChange?.(m.court, 'B', 1)}
+                        onDecrement={() => onScoreChange?.(m.court, 'B', -1)}
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      className={cn(
+                        'flex h-9 w-9 items-center justify-center rounded-full transition-smooth',
+                        m.status === 'playing'
+                          ? 'bg-destructive text-destructive-foreground shadow-soft'
+                          : 'bg-muted text-muted-foreground shadow-soft',
+                      )}
+                    >
+                      <Swords className="h-4 w-4" />
+                    </div>
+                  )}
+                  <span className="font-display text-[10px] font-extrabold tracking-widest text-secondary">
                     VS
                   </span>
+                  {m.gameWinner && m.status !== 'done' && (
+                    <span className="whitespace-nowrap rounded-full bg-primary px-2 py-0.5 font-display text-[9px] font-bold text-primary-foreground">
+                      {m.gameWinner === 'A' ? 'Team A ชนะ' : 'Team B ชนะ'}
+                    </span>
+                  )}
                 </div>
                 <TeamColumn
                   label="Team B"
@@ -307,6 +339,47 @@ export const MatchBoard = ({
               </span>
             ))}
           </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ScoreControl = ({
+  value,
+  disabled,
+  onIncrement,
+  onDecrement,
+}: {
+  value: number;
+  disabled?: boolean;
+  onIncrement: () => void;
+  onDecrement: () => void;
+}) => {
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span className="font-display text-xl font-extrabold tabular-nums text-foreground">
+        {value}
+      </span>
+      {!disabled && (
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={onDecrement}
+            disabled={value === 0}
+            aria-label="ลดคะแนน"
+            className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-muted-foreground transition-smooth hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Minus className="h-2.5 w-2.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onIncrement}
+            aria-label="เพิ่มคะแนน"
+            className="flex h-5 w-5 items-center justify-center rounded-full bg-secondary text-secondary-foreground transition-smooth hover:bg-secondary/80"
+          >
+            <Plus className="h-2.5 w-2.5" />
+          </button>
         </div>
       )}
     </div>

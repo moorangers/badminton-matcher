@@ -57,16 +57,17 @@
 
 ## Phase 4 — ระบบนับคะแนน + Live Scoreboard
 
-**สถานะ:** not-started
-**Dependency:** Phase 0 ✅ + เลือก realtime layer (ยังไม่ confirm — ดู open question ใน [architecture-design.md](./architecture-design.md))
+**สถานะ:** done (2026-09-06) — เลือก **polling ทุก 2 วินาที** เป็น realtime layer, นับคะแนนแบบ **เกมเดียว** (ไม่ track best-of-3) ดู [decision-log.md#adr-013](./decision-log.md)
+**Dependency:** Phase 0 ✅
 
-- [ ] UI นับคะแนนต่อแมตช์ (ใช้ได้ทั้ง casual play และ tournament mode)
-- [ ] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ อัปเดตสดไม่ต้อง refresh
+- [x] UI นับคะแนนต่อแมตช์ — ปุ่ม +/- ต่อทีมบนการ์ดแมตช์ในหน้า dashboard, `POST /api/sessions/:id/matches/:matchId/score` (atomic `$inc` กัน race condition ตอนกดรัว ๆ — เจอบั๊กจริงระหว่างทดสอบและแก้แล้ว), คำนวณผู้ชนะเกมอัตโนมัติ (21 แต้ม win-by-2, cap 30) ผ่าน `getGameWinner()` ใน `matchLifecycle.ts`
+- [x] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ — public page `/scoreboard/[sessionId]` ไม่ต้องมี PIN, poll ทุก 2 วินาที, ตัวอักษรใหญ่อ่านง่ายจากระยะไกล
+- [ ] ยังไม่ทำ: multi-game (best-of-3) tracking — นับแค่เกมเดียวต่อแมตช์ในตอนนี้ ถ้าจะทำ best-of-3 ค่อยว่ากันตอน Phase 5 (tournament) ที่น่าจะต้องการจริง ๆ
 
 ## Phase 5 — Tournament Mode
 
 **สถานะ:** not-started
-**Dependency:** อิสระจากเฟสอื่น (ใช้ engine คนละส่วนกับ casual matching) แต่ได้ประโยชน์ถ้า Phase 4 (scoring) เสร็จก่อน
+**Dependency:** อิสระจากเฟสอื่น (ใช้ engine คนละส่วนกับ casual matching) — Phase 4 (scoring) เสร็จแล้ว ✅ แต่ระบบคะแนนตอนนี้เป็นเกมเดียว ถ้า tournament ต้องการ best-of-3 ต้องขยายเพิ่ม
 
 - [ ] สร้างทัวร์นาเมนต์ ประเภทเดี่ยว/คู่
 - [ ] เลือกรูปแบบสาย: single elimination / double elimination / round robin

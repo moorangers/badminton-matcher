@@ -35,6 +35,9 @@ export interface ApiMatch {
   startedAt?: string | null;
   finishedAt?: string | null;
   statsCounted?: boolean;
+  scoreA: number;
+  scoreB: number;
+  gameWinner: 'A' | 'B' | null;
 }
 
 export interface ApiPartnerHistoryEntry {
@@ -206,3 +209,14 @@ export const closeCourt = (sessionId: string, court: number) =>
 
 export const getPartnerHistory = (sessionId: string) =>
   request<ApiPartnerHistoryEntry[]>(`/sessions/${sessionId}/partner-history`);
+
+export const updateMatchScore = (
+  sessionId: string,
+  matchId: string,
+  team: 'A' | 'B',
+  delta: 1 | -1,
+) =>
+  request<ApiMatch>(`/sessions/${sessionId}/matches/${matchId}/score`, {
+    method: 'POST',
+    body: JSON.stringify({ team, delta }),
+  });

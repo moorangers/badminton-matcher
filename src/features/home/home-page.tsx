@@ -9,6 +9,7 @@ import {
   Newspaper,
   RefreshCw,
   Trash2,
+  Tv,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -42,6 +43,7 @@ import {
   resetSessionStats,
   substituteMatchPlayer,
   undoMatchFinish,
+  updateMatchScore,
   updateMatchStatus as updateMatchStatusApi,
   updateSession,
   verifySessionPin,
@@ -424,6 +426,9 @@ export function HomePage() {
         status: match.status,
         statsCounted: match.statsCounted ?? false,
         finishedAt: match.finishedAt ?? null,
+        scoreA: match.scoreA,
+        scoreB: match.scoreB,
+        gameWinner: match.gameWinner,
         teamA: match.teamA
           .map((playerId) => playerById.get(playerId))
           .filter((player): player is Player => Boolean(player)),
@@ -800,6 +805,36 @@ export function HomePage() {
     } catch (error) {
       showSnackbar({
         title: 'อัปเดตสถานะไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
+  };
+
+  const changeMatchScore = async (
+    court: number,
+    team: 'A' | 'B',
+    delta: 1 | -1,
+  ) => {
+    if (!sessionId) return;
+    const activeMatch = activeMatches.find((match) => match.court === court);
+    if (!activeMatch) return;
+
+    try {
+      const updated = await updateMatchScore(
+        sessionId,
+        activeMatch.matchId,
+        team,
+        delta,
+      );
+      // Patch just this match instead of a full refreshAll() so rapid
+      // point-by-point tapping stays snappy.
+      setMatchesRaw((prev) =>
+        prev.map((match) => (match.id === updated.id ? updated : match)),
+      );
+    } catch (error) {
+      showSnackbar({
+        title: 'ปรับคะแนนไม่สำเร็จ',
         description: getErrorMessage(error),
         variant: 'error',
       });
@@ -1585,13 +1620,25 @@ export function HomePage() {
               </p>
             </div>
           </div>
-          <Link
-            href="/how-to-use"
-            className="flex shrink-0 items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-          >
-            <HelpCircle className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">วิธีใช้งาน</span>
-          </Link>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {sessionId && (
+              <Link
+                href={`/scoreboard/${sessionId}`}
+                target="_blank"
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <Tv className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">จอคะแนนสด</span>
+              </Link>
+            )}
+            <Link
+              href="/how-to-use"
+              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">วิธีใช้งาน</span>
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -1843,6 +1890,7 @@ export function HomePage() {
               onFinish={finishMatch}
               onCloseCourt={requestCloseCourt}
               onSubstitutePlayer={requestSubstitutePlayer}
+              onScoreChange={changeMatchScore}
               undoableCourtId={undoableCourtId}
               onUndoCourtFinish={undoLatestFinishByCourt}
               onOpenPlanEditor={openPlanEditor}
