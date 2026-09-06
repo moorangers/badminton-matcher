@@ -4,7 +4,7 @@
 >
 > **อัปเดต 2026-09-06:** ตัดสินใจแล้วว่าเป็น **1 deployment ต่อ 1 ชมรม** (ไม่มี multi-tenant/`clubId`) และ auth แอดมินใช้ **PIN ต่อ session** — ดู [decision-log.md#adr-006](./decision-log.md) และ [#adr-007](./decision-log.md) ปรับ schema ด้านล่างตามนี้แล้ว
 >
-> **อัปเดต 2026-09-06 (2):** `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` implement เป็น mongoose model จริงแล้วใน `src/lib/db/models/` พร้อม API endpoint ครบสำหรับ 3 อันแรกและ matches/partnerHistory (ดู [roadmap.md](./roadmap.md)) — schema ด้านล่างตรงกับโค้ดจริงแล้ว ยกเว้น `courtBookings`, `posts`, `tournaments`/`tournamentMatches` ที่ยังเป็นแค่แผน (Phase 1 auto-trigger, Phase 3, Phase 5 ตามลำดับ)
+> **อัปเดต 2026-09-06 (2):** `sessions`, `players`, `sessionPlayers`, `matches`, `partnerHistory` implement เป็น mongoose model จริงแล้วใน `src/lib/db/models/` พร้อม API endpoint ครบ (ดู [roadmap.md](./roadmap.md)) — schema ด้านล่างตรงกับโค้ดจริงแล้ว ยกเว้น `posts`, `tournaments`/`tournamentMatches` ที่ยังเป็นแค่แผน (Phase 3, Phase 5 ตามลำดับ) — `courtBookings` ที่เคยร่างไว้ถูกตัดออกแล้ว (ดู ADR-010)
 
 ## คำถามที่ยังต้องตอบก่อนเริ่ม implement จริง
 
@@ -26,19 +26,9 @@
 }
 ```
 
-### `courtBookings` — รองรับฟีเจอร์ "รวมคอร์ด" (ADR-004)
+### ~~`courtBookings`~~ — ไม่ทำแล้ว (ADR-010)
 
-```ts
-{
-  _id: ObjectId,
-  sessionId: ObjectId,
-  court: number,
-  startTime: Date,
-  endTime: Date,          // ใช้เตือน/auto-trigger เมื่อใกล้หมดเวลา
-  mergedIntoCourt?: number, // ถ้าถูกรวมเข้าคอร์ดอื่นแล้ว
-  status: 'active' | 'merged' | 'closed',
-}
-```
+> เดิมเสนอไว้รองรับฟีเจอร์ "รวมคอร์ด" แบบ auto-trigger ตามเวลาจองจริง แต่ตัดสินใจแล้วว่าใช้ manual close-court ล้วนพอ (ดู [decision-log.md#adr-010](./decision-log.md)) — ฟีเจอร์ "รวมคอร์ด" (ปิดคอร์ด) implement จริงแล้วโดยไม่ต้องมี collection นี้ ผ่าน `POST /api/sessions/:id/close-court` ที่แก้ `Session.activeCourts` ตรง ๆ
 
 ### `players` — roster ของชมรม (persistent ข้ามหลาย session ถ้าตอบคำถามข้อ 1 ว่า "ใช่")
 

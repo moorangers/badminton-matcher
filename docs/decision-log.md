@@ -6,6 +6,14 @@
 
 ---
 
+## ADR-010 — ไม่ทำ auto-trigger ปิดคอร์ดตามเวลาจองจริง เก็บไว้แค่ manual
+
+- **วันที่:** 2026-09-06
+- **สถานะ:** decided
+- **Context:** [roadmap.md](./roadmap.md) Phase 1 เคยเสนอให้มี auto-trigger ปิดคอร์ดอัตโนมัติเมื่อถึงเวลาที่จองไว้ (ต้องเพิ่ม `courtBookings.endTime` ตาม [database-design.md](./database-design.md)) เสนอ 3 ทางเลือกให้ผู้ใช้เลือก: (1) manual ล้วนเหมือนเดิม (2) countdown badge + เตือนเมื่อหมดเวลา แต่ยังต้องกดปิดเอง (3) auto-close จริงไม่ต้องกดยืนยัน (เสี่ยงเพราะ client-side timer ไม่แม่นยำถ้าไม่มีคนเปิดแอปค้างไว้ ถ้าจะแม่นจริงต้องมี server cron แยกต่างหาก)
+- **Decision:** เลือกทางเลือก (1) — manual ล้วน ไม่ทำ auto-trigger หรือ countdown ใด ๆ ในตอนนี้ ปุ่ม "ปิดคอร์ด" ที่มีอยู่แล้วตอบโจทย์พอ
+- **Consequences:** ปิด Phase 1 เป็น done ทั้งหมด ไม่มี `courtBookings` collection ที่เคยร่างไว้ใน database-design.md — ถ้าอนาคตอยากได้ auto-reminder (ทางเลือก 2) กลับมาทำได้โดยไม่กระทบโค้ดเดิม เพราะ manual close-court endpoint ที่มีอยู่ไม่ต้องแก้อะไรเพิ่ม
+
 ## ADR-009 — Admin-added players are `checked_in` immediately, only public self-registration creates `registered`
 
 - **วันที่:** 2026-09-06

@@ -22,15 +22,14 @@
 
 ## Phase 1 — แก้ Matching Fairness + Court Merge
 
-**สถานะ:** in-progress (manual ส่วน client-side เสร็จแล้ว 2026-09-06, ตอนนี้ผูกกับ MongoDB ผ่าน Phase 0 แล้ว เหลือแค่ auto-trigger)
+**สถานะ:** done (2026-09-06) — auto-trigger ตัดสินใจไม่ทำแล้ว ใช้ manual ล้วนตามที่ผู้ใช้ยืนยัน (ดู [decision-log.md#adr-010](./decision-log.md))
 **Dependency:** ไม่ต้องรอ Phase 0 เสร็จ (เป็น pure logic) — bundle 2 ฟีเจอร์นี้เพราะอยู่ใน matching engine เดียวกัน (ดู [decision-log.md#adr-005](./decision-log.md))
 
 - [x] เพิ่ม `queuedAt` เป็น tie-breaker รองจากจำนวนแมตช์ (คนรอนานกว่าได้คิวก่อน) — แก้ปัญหา "มาคอร์สไม่พร้อมกัน อยากแฟร์กับคนมาก่อน"
 - [x] เพิ่ม partner-history penalty ตอนสุ่มจับคู่ — แก้ปัญหา "คู่แทบไม่เปลี่ยนเลย"
 - [x] ปุ่ม "ปิดคอร์ด/รวมคอร์ด" แบบ manual — คอร์ดที่ถูกปิด: match ที่กำลังเล่นจบทันที คนไปรวมคิวคอร์ดที่เหลือ (แก้ปัญหา "จองคอร์ด 1hr/2hr")
-- [ ] auto-trigger รวมคอร์ดตามเวลาจองจริง แทน manual (ต้องเพิ่ม `courtBookings.endTime` ตาม [database-design.md](./database-design.md) ที่ยังไม่ implement)
+- [x] ~~auto-trigger รวมคอร์ดตามเวลาจองจริง~~ — **ตัดสินใจไม่ทำ** (2026-09-06) manual ล้วนพอแล้วสำหรับตอนนี้ ดูเหตุผล/ทางเลือกที่พิจารณาใน ADR-010
 - รายละเอียด logic เดิม vs ที่เสนอใหม่ ดู [matching-algorithm.md](./matching-algorithm.md)
-- ยังไม่ได้ bump version/CHANGELOG สำหรับงานนี้ — รอ confirm จากผู้ใช้ก่อน
 
 ## Phase 2 — เช็คอิน 2 ขั้น + QR Self Check-in
 
