@@ -1,6 +1,8 @@
 # Architecture Design
 
-## สถาปัตยกรรมปัจจุบัน (v0.4.2)
+> **อัปเดต 2026-09-06:** ส่วน "สถาปัตยกรรมเป้าหมาย" ด้านล่าง implement ไปแล้วเป็นส่วนใหญ่ (MongoDB, PIN auth, API routes ทั้งหมดใน `src/app/api/`) — ดูสถานะละเอียดที่ [roadmap.md](./roadmap.md) ส่วน "สถาปัตยกรรมปัจจุบัน (v0.4.2)" ด้านล่างเก็บไว้เป็น**ประวัติ**อธิบายจุดเริ่มต้นก่อน refactor เท่านั้น ไม่ใช่สถานะปัจจุบันแล้ว
+
+## สถาปัตยกรรมเดิมก่อน refactor (v0.4.2, historical)
 
 ```mermaid
 flowchart TD
@@ -19,7 +21,7 @@ flowchart TD
 
 - **ไม่มี backend เลย** — ทุกอย่างรันในเบราว์เซอร์
 - **God component**: `HomePage` ถือทั้ง state, handlers, matching algorithm, และ modal ทั้งหมดในไฟล์เดียว (~1500 บรรทัด) — component ย่อยอื่น ๆ เป็น presentational ล้วน รับ props/callback เท่านั้น
-- **Persistence**: ผ่าน custom hook [useLocalStorage.ts](../src/lib/useLocalStorage.ts) — sync แบบ synchronous ในเบราว์เซอร์เดียว ไม่มี cross-device sync ไม่มี conflict resolution
+- **Persistence**: ผ่าน custom hook `useLocalStorage.ts` (ลบไปแล้วตอน migrate เพราะไม่มีใครเรียกใช้แล้ว) — sync แบบ synchronous ในเบราว์เซอร์เดียว ไม่มี cross-device sync ไม่มี conflict resolution
 - ข้อดี: deploy ง่าย (static/edge ได้เลย), ไม่มีต้นทุน infra, เหมาะกับ use case "1 คนถือมือถือคุมทั้งกลุ่ม"
 - ข้อจำกัด: บล็อกฟีเจอร์ multi-device ทั้งหมดตามที่วิเคราะห์ใน [decision-log.md#adr-001](./decision-log.md)
 
@@ -60,22 +62,27 @@ flowchart TD
 - **Realtime**: live scoreboard (Phase 4) ต้องมี mechanism push ข้อมูลสด — เลือกระหว่าง 3rd-party realtime service, polling ถี่ ๆ, หรือ self-host WebSocket
 - **File storage**: รูปภาพ webboard (Phase 3) เก็บที่ไหน (Vercel Blob / Cloudinary / S3 / MongoDB GridFS)
 
-## แนวทาง Module ใหม่ (เสนอ)
+## โครงสร้าง Module จริง (ณ 2026-09-06)
 
 ```text
 src/
-  app/                     # เหมือนเดิม (pages/routing)
+  app/
+    api/                   # route handlers แยกตาม resource (sessions, players, matches, partner-history)
+    page.tsx, layout.tsx   # เหมือนเดิม
   features/
-    matching/              # ย้าย logic จาก home-page.tsx มาที่นี่ (matching algorithm, court state)
-    checkin/                # เช็คอิน 2 ขั้น + QR self check-in (Phase 2)
-    webboard/                # โพสต์รายงาน (Phase 3)
-    scoreboard/              # นับคะแนน + live score (Phase 4)
-    tournament/              # bracket mode (Phase 5)
-  server/
-    api/                    # route handlers แยกตาม resource
-    db/                      # connection + models (mongoose schemas)
-    auth/                    # auth config
-  components/               # ui components เดิม (คงไว้)
+    home/home-page.tsx     # ยังเป็น container เดียวถือ business logic ทั้งหมด (ไม่ได้แตกเป็น features/matching/ ตามที่เคยเสนอ — ตัดสินใจไม่คุ้มที่จะแยกไฟล์ตอน migrate ครั้งนี้ เพราะ diff ใหญ่พอแล้ว)
+    checkin/               # (Phase 2 — ยังไม่มี)
+    webboard/              # (Phase 3 — ยังไม่มี)
+    scoreboard/            # (Phase 4 — ยังไม่มี)
+    tournament/            # (Phase 5 — ยังไม่มี)
+  lib/
+    api/sessionApi.ts      # typed fetch client ฝั่ง UI
+    auth/pin.ts            # PIN hash/verify
+    db/
+      mongodb.ts           # connection singleton
+      models/              # mongoose schemas
+      services/matchLifecycle.ts  # shared stat/partner-history bump+revert
+  components/              # ui components เดิม (คงไว้ ไม่ต้องแก้ตอน migrate เพราะรับแค่ props/callback)
 ```
 
-หมายเหตุ: การแตกไฟล์ `home-page.tsx` เป็น `features/matching/` ควรทำพร้อมกับ Phase 1 (แก้ matching algorithm) เพราะต้อง touch โค้ดส่วนนี้อยู่แล้ว ไม่ต้องแยกเป็นงาน refactor เดี่ยว ๆ ก่อน
+หมายเหตุ: แผนเดิมเสนอ `src/server/` เป็น root แยกต่างหาก แต่ implement จริงใช้ Next.js convention (`src/app/api/` สำหรับ route handlers, `src/lib/` สำหรับ non-route backend code) แทน เพราะเข้ากับโครงสร้างเดิมของโปรเจกต์มากกว่า

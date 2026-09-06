@@ -40,8 +40,6 @@ interface MatchBoardProps {
   onSubstitutePlayer?: (playerId: string) => void;
   undoableCourtId?: number;
   onUndoCourtFinish?: (court: number) => void;
-  canUndoPlanLatest?: boolean;
-  onUndoPlanLatest?: () => void;
   onOpenPlanEditor?: () => void;
 }
 
@@ -82,8 +80,6 @@ export const MatchBoard = ({
   onSubstitutePlayer,
   undoableCourtId,
   onUndoCourtFinish,
-  canUndoPlanLatest = false,
-  onUndoPlanLatest,
   onOpenPlanEditor,
 }: MatchBoardProps) => {
   if (matches.length === 0) return null;
@@ -96,18 +92,6 @@ export const MatchBoard = ({
         </h3>
         {showActions && (
           <div className="flex items-center gap-2">
-            {canUndoPlanLatest && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                onClick={() => onUndoPlanLatest?.()}
-                className="h-8 rounded-full px-3 font-display text-xs font-bold"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                ย้อนแผนล่าสุด
-              </Button>
-            )}
             {onOpenPlanEditor && (
               <Button
                 type="button"

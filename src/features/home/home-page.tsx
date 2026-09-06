@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocalStorage } from '@/lib/useLocalStorage';
 import { Icon } from '@iconify/react';
 import { RefreshCw, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -18,6 +17,34 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { APP_VERSION } from '@/lib/appVersion';
 import { cn } from '@/lib/utils';
+import {
+  ApiError,
+  addSessionPlayers,
+  closeCourt as closeCourtApi,
+  createMatch,
+  createSession,
+  deleteSessionPlayer,
+  getPartnerHistory,
+  getSession,
+  listMatches,
+  listSessionPlayers,
+  renamePlayer,
+  resetSessionStats,
+  substituteMatchPlayer,
+  undoMatchFinish,
+  updateMatchStatus as updateMatchStatusApi,
+  updateSession,
+  verifySessionPin,
+  type ApiMatch,
+  type ApiSession,
+  type ApiSessionPlayer,
+} from '@/lib/api/sessionApi';
+
+const SESSION_STORAGE_KEY = 'bm_session_id';
+const MAX_COURTS = 3;
+const PIN_PATTERN = /^\d{4,6}$/;
+
+type SessionPlan = { mode: Mode; courtIds: number[] };
 
 type PendingSubstitute = {
   playerId: string;
@@ -26,31 +53,21 @@ type PendingSubstitute = {
 };
 
 type ManagePlayerDraft = {
-  playerId: string;
+  sessionPlayerId: string;
+  playerId: string | null;
   name: string;
 };
 
-type SessionPlan = {
-  mode: Mode;
-  courtIds: number[];
+type HydratedMatch = Match & {
+  matchId: string;
+  statsCounted: boolean;
+  finishedAt: string | null;
 };
 
-const MAX_COURTS = 3;
+type ViewState = 'loading' | 'create' | 'pin' | 'dashboard';
 
 const getCourtIds = (count: number) => {
   return Array.from({ length: count }, (_, index) => index + 1);
-};
-
-const normalizeCourtIds = (courtIds: number[], fallbackCount: number) => {
-  const normalized = Array.from(
-    new Set(
-      courtIds.filter((courtId) => courtId >= 1 && courtId <= MAX_COURTS),
-    ),
-  ).sort((a, b) => a - b);
-
-  return normalized.length > 0
-    ? normalized
-    : getCourtIds(Math.min(Math.max(fallbackCount, 1), MAX_COURTS));
 };
 
 const getPlayersPerMatch = (sourceMode: Mode) => {
@@ -65,37 +82,142 @@ const formatCourtLabel = (courtIds: number[]) => {
   return courtIds.map((courtId) => `Court ${courtId}`).join(', ');
 };
 
+const toLocalPlayer = (sessionPlayer: ApiSessionPlayer): Player => ({
+  id: sessionPlayer.id,
+  name: sessionPlayer.name,
+  matches: sessionPlayer.matchesPlayedInSession,
+  queuedAt: new Date(sessionPlayer.queuedAt).getTime(),
+});
+
+const getErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  return 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง';
+};
+
+// ---- pure matching algorithm (unchanged from Phase 1, just no longer reads component state via closure) ----
+
+const shufflePlayers = (sourcePlayers: Player[]) => {
+  const output = [...sourcePlayers];
+  for (let i = output.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [output[i], output[j]] = [output[j], output[i]];
+  }
+  return output;
+};
+
+const rankCandidates = (sourcePlayers: Player[]) => {
+  return shufflePlayers(sourcePlayers).sort((a, b) => {
+    if (a.matches !== b.matches) return a.matches - b.matches;
+    return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);
+  });
+};
+
+const getPairKey = (idA: string, idB: string) => [idA, idB].sort().join('_');
+
+const DOUBLES_PARTNER_COMBOS: [[number, number], [number, number]][] = [
+  [
+    [0, 1],
+    [2, 3],
+  ],
+  [
+    [0, 2],
+    [1, 3],
+  ],
+  [
+    [0, 3],
+    [1, 2],
+  ],
+];
+
+const assignTeams = (slice: Player[], history: Record<string, number>) => {
+  const half = slice.length / 2;
+
+  if (slice.length !== 4) {
+    return { teamA: slice.slice(0, half), teamB: slice.slice(half) };
+  }
+
+  const options = DOUBLES_PARTNER_COMBOS.map(([teamAIdx, teamBIdx]) => {
+    const teamA = teamAIdx.map((i) => slice[i]);
+    const teamB = teamBIdx.map((i) => slice[i]);
+    const score =
+      (history[getPairKey(teamA[0].id, teamA[1].id)] ?? 0) +
+      (history[getPairKey(teamB[0].id, teamB[1].id)] ?? 0);
+
+    return { teamA, teamB, score };
+  });
+
+  const lowestScore = Math.min(...options.map((option) => option.score));
+  const bestOptions = options.filter((option) => option.score === lowestScore);
+  const picked = bestOptions[Math.floor(Math.random() * bestOptions.length)];
+
+  return { teamA: picked.teamA, teamB: picked.teamB };
+};
+
+const buildMatchesFromPlayers = (
+  sourcePlayers: Player[],
+  blockedIds: Set<string>,
+  plan: SessionPlan,
+  history: Record<string, number>,
+) => {
+  const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
+  const availablePlayers = sourcePlayers.filter(
+    (player) => !blockedIds.has(player.id),
+  );
+  const pool = rankCandidates(availablePlayers);
+
+  const newMatches: Match[] = [];
+  const used = new Set<string>();
+
+  for (const courtId of plan.courtIds) {
+    const slice = pool
+      .filter((player) => !used.has(player.id))
+      .slice(0, planPlayersPerMatch);
+    if (slice.length < planPlayersPerMatch) {
+      break;
+    }
+
+    slice.forEach((player) => used.add(player.id));
+
+    const { teamA, teamB } = assignTeams(slice, history);
+    newMatches.push({ court: courtId, mode: plan.mode, teamA, teamB, status: 'ready' });
+  }
+
+  return { newMatches, used };
+};
+
 export function HomePage() {
-  const [mode, setMode, removeMode] = useLocalStorage<Mode>(
-    'bm_mode',
-    'doubles',
+  // ---- session bootstrap ----
+  const [bootstrapped, setBootstrapped] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [session, setSession] = useState<ApiSession | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  // ---- create-session form ----
+  const [createMode, setCreateMode] = useState<Mode>('doubles');
+  const [createCourts, setCreateCourts] = useState(1);
+  const [createPin, setCreatePin] = useState('');
+  const [isCreatingSession, setIsCreatingSession] = useState(false);
+
+  // ---- pin gate ----
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [isVerifyingPin, setIsVerifyingPin] = useState(false);
+
+  // ---- server-backed data ----
+  const [sessionPlayersRaw, setSessionPlayersRaw] = useState<
+    ApiSessionPlayer[]
+  >([]);
+  const [matchesRaw, setMatchesRaw] = useState<ApiMatch[]>([]);
+  const [partnerHistory, setPartnerHistory] = useState<Record<string, number>>(
+    {},
   );
-  const [courts, setCourts, removeCourts] = useLocalStorage<number>(
-    'bm_courts',
-    1,
-  );
-  const [players, setPlayers, removePlayers] = useLocalStorage<Player[]>(
-    'bm_players',
-    [],
-  );
-  const [matches, setMatches, removeMatches] = useLocalStorage<Match[]>(
-    'bm_matches',
-    [],
-  );
-  const [nextMatches, setNextMatches, removeNextMatches] = useLocalStorage<
-    Match[]
-  >('bm_nextMatches', []);
-  const [activeCourtIds, setActiveCourtIds, removeActiveCourtIds] =
-    useLocalStorage<number[]>('bm_activeCourtIds', []);
-  const [nextPlan, setNextPlan, removeNextPlan] =
-    useLocalStorage<SessionPlan | null>('bm_nextPlan', null);
-  const [
-    totalFinishedMatches,
-    setTotalFinishedMatches,
-    removeTotalFinishedMatches,
-  ] = useLocalStorage<number>('bm_totalFinishedMatches', 0);
-  const [partnerHistory, setPartnerHistory, removePartnerHistory] =
-    useLocalStorage<Record<string, number>>('bm_partnerHistory', {});
+  const [nextMatches, setNextMatches] = useState<Match[]>([]);
+
+  // ---- pre-game draft (only used while there are no active matches yet) ----
+  const [draftMode, setDraftMode] = useState<Mode>('doubles');
+  const [draftCourts, setDraftCourts] = useState(1);
+
+  // ---- misc UI state (same shape as before) ----
   const [managePlayerDraft, setManagePlayerDraft] =
     useState<ManagePlayerDraft | null>(null);
   const [pendingSubstitute, setPendingSubstitute] =
@@ -107,173 +229,13 @@ export function HomePage() {
   const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
 
-  type UndoSnapshot = {
-    actionType: 'finish' | 'plan';
-    courtId?: number;
-    mode: Mode;
-    courts: number;
-    players: Player[];
-    matches: Match[];
-    nextMatches: Match[];
-    activeCourtIds: number[];
-    nextPlan: SessionPlan | null;
-    totalFinishedMatches: number;
-    partnerHistory: Record<string, number>;
-    label: string;
-  };
-  const [undoStack, setUndoStack] = useState<UndoSnapshot[]>([]);
-
-  const sessionCourtIds = useMemo(() => {
-    if (matches.length === 0) {
-      return normalizeCourtIds(
-        activeCourtIds.length > 0 ? activeCourtIds : getCourtIds(courts),
-        courts,
-      );
-    }
-
-    const courtIdsFromMatches = matches.map((match) => match.court);
-    const fallbackCourtIds =
-      courtIdsFromMatches.length > 0
-        ? courtIdsFromMatches
-        : getCourtIds(courts);
-
-    return normalizeCourtIds(
-      activeCourtIds.length > 0 ? activeCourtIds : fallbackCourtIds,
-      courts,
-    );
-  }, [activeCourtIds, courts, matches]);
-
-  const currentPlan = useMemo<SessionPlan>(
-    () => ({
-      mode,
-      courtIds: sessionCourtIds,
-    }),
-    [mode, sessionCourtIds],
-  );
-
-  const playersPerMatch = getPlayersPerMatch(mode);
-
-  const activeMatches = useMemo(
-    () => matches.filter((match) => match.status !== 'done'),
-    [matches],
-  );
-  const currentSessionSummary = useMemo(() => {
-    if (activeMatches.length === 0) return undefined;
-
-    const courtIds = Array.from(
-      new Set(activeMatches.map((match) => match.court)),
-    ).sort((a, b) => a - b);
-    const modes = Array.from(new Set(activeMatches.map((match) => match.mode)));
-    const modeLabel =
-      modes.length === 1 ? formatModeLabel(modes[0]) : 'Mixed mode';
-
-    return `${formatCourtLabel(courtIds)} · ${modeLabel}`;
-  }, [activeMatches]);
-
-  const stats = useMemo(() => {
-    const activeMatchIds = new Set(
-      matches
-        .filter((match) => match.status !== 'done')
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
-    const playingIds = new Set(
-      matches
-        .filter((match) => match.status === 'playing')
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
-    const resting = players.filter((player) => !activeMatchIds.has(player.id));
-
-    return {
-      playing: playingIds.size,
-      resting: resting.length,
-      restingPlayers: resting,
-    };
-  }, [matches, players]);
-
-  useEffect(() => {
-    if (!managePlayerDraft) return;
-    const input = manageNameInputRef.current;
-    if (!input) return;
-    input.focus();
-    input.select();
-  }, [managePlayerDraft?.playerId]);
-
-  const pushUndo = (
-    label: string,
-    actionType: 'finish' | 'plan',
-    courtId?: number,
-  ) => {
-    setUndoStack((prev) => [
-      ...prev.slice(-4),
-      {
-        actionType,
-        courtId,
-        mode,
-        courts,
-        players,
-        matches,
-        nextMatches,
-        activeCourtIds,
-        nextPlan,
-        totalFinishedMatches,
-        partnerHistory,
-        label,
-      },
-    ]);
-  };
-
-  const undoLast = () => {
-    setUndoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const snapshot = prev.at(-1)!;
-      setMode(snapshot.mode);
-      setCourts(snapshot.courts);
-      setPlayers(snapshot.players);
-      setMatches(snapshot.matches);
-      setNextMatches(snapshot.nextMatches);
-      setActiveCourtIds(snapshot.activeCourtIds);
-      setNextPlan(snapshot.nextPlan);
-      setTotalFinishedMatches(snapshot.totalFinishedMatches);
-      setPartnerHistory(snapshot.partnerHistory);
-      return prev.slice(0, -1);
-    });
-  };
-
-  const latestUndo = undoStack.at(-1);
-  const undoableCourtId =
-    latestUndo?.actionType === 'finish' ? latestUndo.courtId : undefined;
-  const canUndoLatestPlan = latestUndo?.actionType === 'plan';
-
-  const undoLatestFinishByCourt = (court: number) => {
-    if (undoableCourtId !== court) {
-      showSnackbar({
-        title: 'ยังย้อนกลับคอร์ดนี้ไม่ได้',
-        description: 'ย้อนกลับได้เฉพาะคอร์ดที่กดจบล่าสุด',
-        variant: 'info',
-      });
-      return;
-    }
-
-    const label = latestUndo?.label;
-    undoLast();
-    toast.success('ย้อนกลับคอร์ดแล้ว', {
-      description: label ? `ยกเลิก: ${label}` : undefined,
-      duration: 2500,
-    });
-  };
-
-  const undoLatestPlan = () => {
-    if (!canUndoLatestPlan) return;
-
-    const label = latestUndo?.label;
-    undoLast();
-    toast.success('ย้อนกลับแผนแล้ว', {
-      description: label ? `ยกเลิก: ${label}` : undefined,
-      duration: 2500,
-    });
-  };
+  const view: ViewState = !bootstrapped
+    ? 'loading'
+    : !session
+      ? 'create'
+      : !isAuthenticated
+        ? 'pin'
+        : 'dashboard';
 
   const showSnackbar = ({
     title,
@@ -296,578 +258,325 @@ export function HomePage() {
     toast(title, options);
   };
 
-  const getActivePlayerIds = (sourceMatches: Match[]) => {
-    return new Set(
-      sourceMatches
-        .filter((match) => match.status !== 'done')
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
-  };
-
-  const shufflePlayers = (sourcePlayers: Player[]) => {
-    const output = [...sourcePlayers];
-    for (let i = output.length - 1; i > 0; i -= 1) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [output[i], output[j]] = [output[j], output[i]];
-    }
-    return output;
-  };
-
-  const rankCandidates = (sourcePlayers: Player[]) => {
-    return shufflePlayers(sourcePlayers).sort((a, b) => {
-      if (a.matches !== b.matches) return a.matches - b.matches;
-      return (a.queuedAt ?? 0) - (b.queuedAt ?? 0);
-    });
-  };
-
-  const getPairKey = (idA: string, idB: string) => [idA, idB].sort().join('_');
-
-  const incrementPartnerHistory = (
-    sourceHistory: Record<string, number>,
-    matchesToCount: Match[],
-  ) => {
-    const next = { ...sourceHistory };
-    const bumpTeam = (team: Player[]) => {
-      if (team.length !== 2) return;
-      const key = getPairKey(team[0].id, team[1].id);
-      next[key] = (next[key] ?? 0) + 1;
-    };
-
-    matchesToCount.forEach((match) => {
-      bumpTeam(match.teamA);
-      bumpTeam(match.teamB);
-    });
-
-    return next;
-  };
-
-  const DOUBLES_PARTNER_COMBOS: [[number, number], [number, number]][] = [
-    [
-      [0, 1],
-      [2, 3],
-    ],
-    [
-      [0, 2],
-      [1, 3],
-    ],
-    [
-      [0, 3],
-      [1, 2],
-    ],
-  ];
-
-  const assignTeams = (slice: Player[], history: Record<string, number>) => {
-    const half = slice.length / 2;
-
-    if (slice.length !== 4) {
-      return { teamA: slice.slice(0, half), teamB: slice.slice(half) };
+  // ---- bootstrap: read stored session id, validate it against the server ----
+  useEffect(() => {
+    const stored = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stored) {
+      setBootstrapped(true);
+      return;
     }
 
-    const options = DOUBLES_PARTNER_COMBOS.map(([teamAIdx, teamBIdx]) => {
-      const teamA = teamAIdx.map((i) => slice[i]);
-      const teamB = teamBIdx.map((i) => slice[i]);
-      const score =
-        (history[getPairKey(teamA[0].id, teamA[1].id)] ?? 0) +
-        (history[getPairKey(teamB[0].id, teamB[1].id)] ?? 0);
-
-      return { teamA, teamB, score };
-    });
-
-    const lowestScore = Math.min(...options.map((option) => option.score));
-    const bestOptions = options.filter(
-      (option) => option.score === lowestScore,
-    );
-    const picked = bestOptions[Math.floor(Math.random() * bestOptions.length)];
-
-    return { teamA: picked.teamA, teamB: picked.teamB };
-  };
-
-  const buildMatchesFromPlayers = (
-    sourcePlayers: Player[],
-    blockedIds: Set<string> = new Set(),
-    plan: SessionPlan = currentPlan,
-    history: Record<string, number> = partnerHistory,
-  ) => {
-    const planCourtIds = normalizeCourtIds(plan.courtIds, courts);
-    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
-    const availablePlayers = sourcePlayers.filter(
-      (player) => !blockedIds.has(player.id),
-    );
-    const pool = rankCandidates(availablePlayers);
-
-    const newMatches: Match[] = [];
-    const used = new Set<string>();
-
-    for (const courtId of planCourtIds) {
-      const slice = pool
-        .filter((player) => !used.has(player.id))
-        .slice(0, planPlayersPerMatch);
-      if (slice.length < planPlayersPerMatch) {
-        break;
+    let cancelled = false;
+    (async () => {
+      try {
+        const fetched = await getSession(stored);
+        if (cancelled) return;
+        setSessionId(stored);
+        setSession(fetched);
+        setDraftMode(fetched.mode);
+        setDraftCourts(fetched.activeCourts.length);
+      } catch {
+        if (cancelled) return;
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      } finally {
+        if (!cancelled) setBootstrapped(true);
       }
+    })();
 
-      slice.forEach((player) => used.add(player.id));
-
-      const { teamA, teamB } = assignTeams(slice, history);
-      newMatches.push({
-        court: courtId,
-        mode: plan.mode,
-        teamA,
-        teamB,
-        status: 'ready',
-      });
-    }
-
-    return { newMatches, used };
-  };
-
-  const incrementPlayedCounts = (
-    sourcePlayers: Player[],
-    playedIds: Set<string>,
-  ) => {
-    const now = Date.now();
-    return sourcePlayers.map((player) =>
-      playedIds.has(player.id)
-        ? { ...player, matches: player.matches + 1, queuedAt: now }
-        : player,
-    );
-  };
-
-  const pruneClosedCourtMatches = (
-    sourceMatches: Match[],
-    plan: SessionPlan = currentPlan,
-  ) => {
-    const plannedCourtIds = new Set(plan.courtIds);
-
-    return sourceMatches.filter((match) => {
-      return match.status !== 'done' || plannedCourtIds.has(match.court);
-    });
-  };
-
-  const isPlanActiveForCurrentMatches = (
-    sourceMatches: Match[],
-    plan: SessionPlan,
-  ) => {
-    const plannedCourtIds = new Set(plan.courtIds);
-    const openMatches = sourceMatches.filter(
-      (match) => match.status !== 'done',
-    );
-
-    if (openMatches.length === 0) return false;
-
-    return openMatches.every((match) => {
-      return plannedCourtIds.has(match.court) && match.mode === plan.mode;
-    });
-  };
-
-  const updateMatchStatus = (court: number, status: MatchStatus) => {
-    setMatches((prev) =>
-      prev.map((match) =>
-        match.court === court ? { ...match, status } : match,
-      ),
-    );
-  };
-
-  const finishMatch = (court: number) => {
-    const finishedMatch = matches.find((match) => match.court === court);
-    if (!finishedMatch) return;
-
-    pushUndo(`จบแมตช์ Court ${court}`, 'finish', court);
-    setTotalFinishedMatches((prev) => prev + 1);
-
-    const plan = currentPlan;
-    const plannedCourtIds = new Set(plan.courtIds);
-    const clearNextPlanIfApplied = (sourceMatches: Match[]) => {
-      if (nextPlan && isPlanActiveForCurrentMatches(sourceMatches, nextPlan)) {
-        setNextPlan(null);
-      }
+    return () => {
+      cancelled = true;
     };
+  }, []);
 
-    const finishedPlayerIds = new Set(
-      [...finishedMatch.teamA, ...finishedMatch.teamB].map(
-        (player) => player.id,
-      ),
-    );
-    const playersAfterFinish = incrementPlayedCounts(
-      players,
-      finishedPlayerIds,
-    );
-    const historyAfterFinish = incrementPartnerHistory(partnerHistory, [
-      finishedMatch,
-    ]);
+  const refreshAll = async (sid: string) => {
+    try {
+      const [rawPlayers, rawMatches, rawHistory, freshSession] =
+        await Promise.all([
+          listSessionPlayers(sid),
+          listMatches(sid),
+          getPartnerHistory(sid),
+          getSession(sid),
+        ]);
 
-    const markedDoneMatches: Match[] = matches.map((match) =>
-      match.court === court ? { ...match, status: 'done' } : match,
-    );
-    const updatedMatches = pruneClosedCourtMatches(markedDoneMatches, plan);
-
-    if (plannedCourtIds.has(court) && nextMatches.length > 0) {
-      const activeOtherIds = getActivePlayerIds(updatedMatches);
-      const canUseNextMatch = (nextMatch: Match) => {
-        return [...nextMatch.teamA, ...nextMatch.teamB].every(
-          (player) => !activeOtherIds.has(player.id),
-        );
+      const historyMap = Object.fromEntries(
+        rawHistory.map((entry) => [entry.pairKey, entry.timesPlayedTogether]),
+      );
+      const localPlayers = rawPlayers.map(toLocalPlayer);
+      const activeIds = new Set(
+        rawMatches
+          .filter((match) => match.status !== 'done')
+          .flatMap((match) => [...match.teamA, ...match.teamB]),
+      );
+      const plan: SessionPlan = {
+        mode: freshSession.mode,
+        courtIds: freshSession.activeCourts,
       };
-      const sameCourtIndex = nextMatches.findIndex((nextMatch) => {
-        return nextMatch.court === court && canUseNextMatch(nextMatch);
-      });
-      const nextIndex =
-        sameCourtIndex >= 0
-          ? sameCourtIndex
-          : nextMatches.findIndex(canUseNextMatch);
-
-      if (nextIndex >= 0) {
-        const nextUp = nextMatches[nextIndex];
-        const matchesAfterPull: Match[] = updatedMatches.map((match) =>
-          match.court === court
-            ? {
-                ...nextUp,
-                court,
-                mode: nextUp.mode ?? plan.mode,
-                status: 'ready',
-              }
-            : match,
-        );
-        const activeAfterPullIds = getActivePlayerIds(matchesAfterPull);
-        const preview = buildMatchesFromPlayers(
-          playersAfterFinish,
-          activeAfterPullIds,
-          plan,
-          historyAfterFinish,
-        );
-
-        setPlayers(playersAfterFinish);
-        setPartnerHistory(historyAfterFinish);
-        setMatches(matchesAfterPull);
-        setNextMatches(preview.newMatches);
-        clearNextPlanIfApplied(matchesAfterPull);
-        showSnackbar({
-          title: `Court ${court} จบแมตช์แล้ว`,
-          description: `ดึงคู่ถัดไปขึ้น Court ${court} แล้ว`,
-          variant: 'success',
-        });
-        return;
-      }
-    }
-
-    const activeAfterFinishIds = getActivePlayerIds(updatedMatches);
-    const preview = buildMatchesFromPlayers(
-      playersAfterFinish,
-      activeAfterFinishIds,
-      plan,
-      historyAfterFinish,
-    );
-    const sameCourtGeneratedIndex = preview.newMatches.findIndex(
-      (match) => match.court === court,
-    );
-    const canGenerateNextForCourt =
-      plannedCourtIds.has(court) && preview.newMatches.length > 0;
-    let generatedNextIndex = -1;
-    if (canGenerateNextForCourt) {
-      generatedNextIndex = Math.max(sameCourtGeneratedIndex, 0);
-    }
-
-    if (generatedNextIndex >= 0) {
-      const nextUp = preview.newMatches[generatedNextIndex];
-      const matchesAfterGeneratedPull: Match[] = updatedMatches.map((match) =>
-        match.court === court
-          ? {
-              ...nextUp,
-              court,
-              mode: nextUp.mode ?? plan.mode,
-              status: 'ready',
-            }
-          : match,
-      );
-      const activeAfterGeneratedPullIds = getActivePlayerIds(
-        matchesAfterGeneratedPull,
-      );
-      const nextPreview = buildMatchesFromPlayers(
-        playersAfterFinish,
-        activeAfterGeneratedPullIds,
+      const preview = buildMatchesFromPlayers(
+        localPlayers,
+        activeIds,
         plan,
-        historyAfterFinish,
+        historyMap,
       );
 
-      setPlayers(playersAfterFinish);
-      setPartnerHistory(historyAfterFinish);
-      setMatches(matchesAfterGeneratedPull);
-      setNextMatches(nextPreview.newMatches);
-      clearNextPlanIfApplied(matchesAfterGeneratedPull);
+      setSession(freshSession);
+      setSessionPlayersRaw(rawPlayers);
+      setMatchesRaw(rawMatches);
+      setPartnerHistory(historyMap);
+      setNextMatches(preview.newMatches);
+    } catch (error) {
       showSnackbar({
-        title: `Court ${court} จบแมตช์แล้ว`,
-        description: `จัดคู่ใหม่ขึ้น Court ${court} ตามแผนรอบถัดไปแล้ว`,
-        variant: 'success',
+        title: 'โหลดข้อมูลไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
       });
-      return;
     }
-
-    const hasActiveMatches = updatedMatches.some(
-      (match) => match.status !== 'done',
-    );
-
-    if (!hasActiveMatches && preview.newMatches.length > 0) {
-      const nextPreview = buildMatchesFromPlayers(
-        playersAfterFinish,
-        preview.used,
-        plan,
-        historyAfterFinish,
-      );
-
-      setPlayers(playersAfterFinish);
-      setPartnerHistory(historyAfterFinish);
-      setMatches(preview.newMatches);
-      setNextMatches(nextPreview.newMatches);
-      clearNextPlanIfApplied(preview.newMatches);
-      showSnackbar({
-        title: 'เริ่มรอบถัดไปอัตโนมัติ',
-        description: 'จัดคู่ใหม่ตามแผนรอบถัดไปแล้ว',
-        variant: 'success',
-      });
-      return;
-    }
-
-    setPlayers(playersAfterFinish);
-    setPartnerHistory(historyAfterFinish);
-    setMatches(updatedMatches);
-    setNextMatches(preview.newMatches);
-    clearNextPlanIfApplied(updatedMatches);
-
-    showSnackbar({
-      title: `Court ${court} จบแมตช์แล้ว`,
-      description: 'อัปเดตสถานะเป็นจบแมตช์แล้ว',
-      variant: 'success',
-    });
   };
 
-  const closeCourtNow = (court: number) => {
-    const targetMatch = matches.find((match) => match.court === court);
-    if (!targetMatch) return;
+  useEffect(() => {
+    if (sessionId && isAuthenticated) {
+      refreshAll(sessionId);
+    }
+  }, [sessionId, isAuthenticated]);
 
-    pushUndo(`ปิด Court ${court}`, 'finish', court);
+  useEffect(() => {
+    if (!managePlayerDraft) return;
+    const input = manageNameInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [managePlayerDraft?.sessionPlayerId]);
 
-    const wasPlaying = targetMatch.status === 'playing';
-    const affectedPlayerIds = new Set(
-      [...targetMatch.teamA, ...targetMatch.teamB].map((player) => player.id),
+  // ---- derived data ----
+  const players = useMemo(
+    () => sessionPlayersRaw.map(toLocalPlayer),
+    [sessionPlayersRaw],
+  );
+  const playerById = useMemo(
+    () => new Map(players.map((player) => [player.id, player])),
+    [players],
+  );
+
+  const activeMatches: HydratedMatch[] = useMemo(() => {
+    return matchesRaw
+      .filter((match) => match.status !== 'done')
+      .map((match) => ({
+        matchId: match.id,
+        court: match.court,
+        mode: match.mode,
+        status: match.status,
+        statsCounted: match.statsCounted ?? false,
+        finishedAt: match.finishedAt ?? null,
+        teamA: match.teamA
+          .map((playerId) => playerById.get(playerId))
+          .filter((player): player is Player => Boolean(player)),
+        teamB: match.teamB
+          .map((playerId) => playerById.get(playerId))
+          .filter((player): player is Player => Boolean(player)),
+      }))
+      .sort((a, b) => a.court - b.court);
+  }, [matchesRaw, playerById]);
+
+  const totalFinishedMatches = useMemo(
+    () =>
+      matchesRaw.filter((match) => match.status === 'done' && match.statsCounted)
+        .length,
+    [matchesRaw],
+  );
+
+  const latestFinishedMatch = useMemo(() => {
+    const doneWithStats = matchesRaw.filter(
+      (match) => match.status === 'done' && match.statsCounted && match.finishedAt,
     );
-    const now = Date.now();
-    const playersAfterClose = players.map((player) =>
-      affectedPlayerIds.has(player.id)
-        ? {
-            ...player,
-            matches: wasPlaying ? player.matches + 1 : player.matches,
-            queuedAt: now,
-          }
-        : player,
+    if (doneWithStats.length === 0) return null;
+
+    return doneWithStats.reduce((latest, match) =>
+      new Date(match.finishedAt!) > new Date(latest.finishedAt!) ? match : latest,
     );
-    const historyAfterClose = wasPlaying
-      ? incrementPartnerHistory(partnerHistory, [targetMatch])
-      : partnerHistory;
+  }, [matchesRaw]);
 
-    if (wasPlaying) {
-      setTotalFinishedMatches((prev) => prev + 1);
-    }
+  const undoableCourtId = latestFinishedMatch?.court;
 
-    const remainingMatches = matches.filter((match) => match.court !== court);
-    const remainingCourtIds = sessionCourtIds.filter((id) => id !== court);
+  const currentSessionSummary = useMemo(() => {
+    if (activeMatches.length === 0) return undefined;
 
-    if (nextPlan) {
-      setNextPlan({
-        ...nextPlan,
-        courtIds: nextPlan.courtIds.filter((id) => id !== court),
-      });
-    }
+    const courtIds = Array.from(
+      new Set(activeMatches.map((match) => match.court)),
+    ).sort((a, b) => a - b);
+    const modes = Array.from(new Set(activeMatches.map((match) => match.mode)));
+    const modeLabel =
+      modes.length === 1 ? formatModeLabel(modes[0]) : 'Mixed mode';
 
-    if (remainingCourtIds.length === 0) {
-      setPlayers(playersAfterClose);
-      setPartnerHistory(historyAfterClose);
-      setMatches([]);
-      setNextMatches([]);
-      setActiveCourtIds([]);
-      showSnackbar({
-        title: `ปิด Court ${court} แล้ว`,
-        description: 'ไม่มีคอร์ดที่เปิดอยู่แล้ว',
-        variant: 'info',
-      });
-      return;
-    }
+    return `${formatCourtLabel(courtIds)} · ${modeLabel}`;
+  }, [activeMatches]);
 
-    const closedPlan: SessionPlan = {
-      mode: currentPlan.mode,
-      courtIds: remainingCourtIds,
+  const stats = useMemo(() => {
+    const playingCount = activeMatches
+      .filter((match) => match.status === 'playing')
+      .reduce((sum, match) => sum + match.teamA.length + match.teamB.length, 0);
+    const restingRaw = sessionPlayersRaw.filter(
+      (sessionPlayer) => sessionPlayer.status !== 'playing',
+    );
+
+    return {
+      playing: playingCount,
+      resting: restingRaw.length,
+      restingPlayers: restingRaw.map(toLocalPlayer),
     };
-    const blockedIds = getActivePlayerIds(remainingMatches);
-    const preview = buildMatchesFromPlayers(
-      playersAfterClose,
-      blockedIds,
-      closedPlan,
-      historyAfterClose,
-    );
+  }, [activeMatches, sessionPlayersRaw]);
 
-    setPlayers(playersAfterClose);
-    setPartnerHistory(historyAfterClose);
-    setMatches(remainingMatches);
-    setNextMatches(preview.newMatches);
-    setActiveCourtIds(remainingCourtIds);
+  const playersPerMatch = getPlayersPerMatch(draftMode);
+  const displayMode =
+    activeMatches.length > 0 ? (session?.mode ?? draftMode) : draftMode;
+  const displayCourts =
+    activeMatches.length > 0
+      ? (session?.activeCourts.length ?? draftCourts)
+      : draftCourts;
 
-    showSnackbar({
-      title: `ปิด Court ${court} แล้ว`,
-      description: 'ย้ายผู้เล่นเข้าคิวรวมกับคอร์ดที่เหลือแล้ว',
-      variant: 'success',
-    });
-  };
+  // ---- session bootstrap actions ----
 
-  const requestCloseCourt = (court: number) => {
-    setPendingCourtClose(court);
-  };
-
-  const confirmCloseCourt = () => {
-    if (pendingCourtClose === null) return;
-    closeCourtNow(pendingCourtClose);
-    setPendingCourtClose(null);
-  };
-
-  const addPlayers = (names: string[]) => {
-    const incoming = names.map((name) => name.trim()).filter(Boolean);
-    if (incoming.length === 0) return;
-
-    const existing = new Set(
-      players.map((player) => player.name.toLowerCase()),
-    );
-    const duplicates: string[] = [];
-    const accepted: string[] = [];
-
-    incoming.forEach((name) => {
-      const key = name.toLowerCase();
-      if (existing.has(key)) {
-        duplicates.push(name);
-        return;
-      }
-      existing.add(key);
-      accepted.push(name);
-    });
-
-    if (accepted.length > 0) {
-      const acceptedPlayers = accepted.map((name) => ({
-        id: crypto.randomUUID(),
-        name,
-        matches: 0,
-        queuedAt: Date.now(),
-      }));
-      const updatedPlayers = [...players, ...acceptedPlayers];
-
-      setPlayers(updatedPlayers);
-      if (matches.length > 0) {
-        const activeIds = getActivePlayerIds(matches);
-        const preview = buildMatchesFromPlayers(updatedPlayers, activeIds);
-        setNextMatches(preview.newMatches);
-      } else {
-        setNextMatches([]);
-      }
-    }
-
-    if (accepted.length > 0 && duplicates.length === 0) {
-      toast.dismiss();
-      return;
-    }
-
-    if (accepted.length === 0) {
+  const handleCreateSession = async () => {
+    if (!PIN_PATTERN.test(createPin)) {
       showSnackbar({
-        title: 'ชื่อซ้ำ',
-        description: `มีผู้เล่นชื่อ "${duplicates[0]}" อยู่แล้ว`,
+        title: 'PIN ไม่ถูกต้อง',
+        description: 'PIN ต้องเป็นตัวเลข 4-6 หลัก',
         variant: 'error',
       });
       return;
     }
 
-    showSnackbar({
-      title: `เพิ่มได้ ${accepted.length} คน`,
-      description: `ข้ามชื่อซ้ำ ${duplicates.length} คน`,
-      variant: 'info',
-    });
+    setIsCreatingSession(true);
+    try {
+      const courtIds = getCourtIds(createCourts);
+      const created = await createSession(createMode, createPin, courtIds);
+      window.localStorage.setItem(SESSION_STORAGE_KEY, created.id);
+      setSessionId(created.id);
+      setSession(created);
+      setIsAuthenticated(true);
+      setDraftMode(created.mode);
+      setDraftCourts(created.activeCourts.length);
+      setCreatePin('');
+    } catch (error) {
+      showSnackbar({
+        title: 'สร้าง session ไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    } finally {
+      setIsCreatingSession(false);
+    }
   };
 
-  const removePlayer = (id: string) => {
-    const targetPlayer = players.find((player) => player.id === id);
-    if (!targetPlayer) return false;
+  const handleVerifyPin = async () => {
+    if (!sessionId) return;
 
-    const activeMatch = matches.find(
-      (match) =>
-        match.status !== 'done' &&
-        [...match.teamA, ...match.teamB].some((player) => player.id === id),
-    );
+    setIsVerifyingPin(true);
+    setPinError(null);
+    try {
+      await verifySessionPin(sessionId, pinInput);
+      setIsAuthenticated(true);
+      setPinInput('');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setPinError('PIN ไม่ถูกต้อง');
+      } else {
+        setPinError(getErrorMessage(error));
+      }
+    } finally {
+      setIsVerifyingPin(false);
+    }
+  };
 
-    if (activeMatch) {
+  const forgetSession = () => {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    setSessionId(null);
+    setSession(null);
+    setIsAuthenticated(false);
+    setSessionPlayersRaw([]);
+    setMatchesRaw([]);
+    setPartnerHistory({});
+    setNextMatches([]);
+    setPlanDraft(null);
+    setPinInput('');
+    setPinError(null);
+    toast.dismiss();
+  };
+
+  // ---- player management ----
+
+  const addPlayers = async (names: string[]) => {
+    if (!sessionId) return;
+
+    try {
+      const { accepted, duplicates } = await addSessionPlayers(sessionId, names);
+      await refreshAll(sessionId);
+
+      if (accepted.length > 0 && duplicates.length === 0) {
+        toast.dismiss();
+        return;
+      }
+      if (accepted.length === 0) {
+        showSnackbar({
+          title: 'ชื่อซ้ำ',
+          description: `มีผู้เล่นชื่อ "${duplicates[0]}" อยู่แล้ว`,
+          variant: 'error',
+        });
+        return;
+      }
+      showSnackbar({
+        title: `เพิ่มได้ ${accepted.length} คน`,
+        description: `ข้ามชื่อซ้ำ ${duplicates.length} คน`,
+        variant: 'info',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'เพิ่มผู้เล่นไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
+  };
+
+  const removePlayer = async (id: string): Promise<boolean> => {
+    if (!sessionId) return false;
+    const target = players.find((player) => player.id === id);
+    if (!target) return false;
+
+    try {
+      await deleteSessionPlayer(sessionId, id);
+      await refreshAll(sessionId);
+      showSnackbar({
+        title: `ลบ ${target.name} แล้ว`,
+        description: 'อัปเดตรายการผู้เล่นเรียบร้อย',
+        variant: 'info',
+      });
+      return true;
+    } catch (error) {
       showSnackbar({
         title: 'ยังลบผู้เล่นไม่ได้',
-        description: `${targetPlayer.name} กำลังอยู่ใน Court ${activeMatch.court} ให้เปลี่ยนตัวก่อน`,
+        description: getErrorMessage(error),
         variant: 'error',
       });
       return false;
     }
-
-    const updatedPlayers = players.filter((player) => player.id !== id);
-    setPlayers(updatedPlayers);
-    if (matches.length > 0) {
-      const activeIds = getActivePlayerIds(matches);
-      const preview = buildMatchesFromPlayers(updatedPlayers, activeIds);
-      setNextMatches(preview.newMatches);
-    } else {
-      setNextMatches([]);
-    }
-
-    showSnackbar({
-      title: `ลบ ${targetPlayer.name} แล้ว`,
-      description: 'อัปเดตรายการผู้เล่นเรียบร้อย',
-      variant: 'info',
-    });
-
-    return true;
-  };
-
-  const renamePlayerInMatches = (
-    sourceMatches: Match[],
-    playerId: string,
-    nextName: string,
-  ): Match[] => {
-    return sourceMatches.map((match) => ({
-      ...match,
-      teamA: match.teamA.map((player) =>
-        player.id === playerId ? { ...player, name: nextName } : player,
-      ),
-      teamB: match.teamB.map((player) =>
-        player.id === playerId ? { ...player, name: nextName } : player,
-      ),
-    }));
   };
 
   const openManagePlayer = (id: string) => {
-    const targetPlayer = players.find((player) => player.id === id);
-    if (!targetPlayer) return;
+    const target = sessionPlayersRaw.find((sessionPlayer) => sessionPlayer.id === id);
+    if (!target) return;
 
     setManagePlayerDraft({
-      playerId: id,
-      name: targetPlayer.name,
+      sessionPlayerId: target.id,
+      playerId: target.playerId,
+      name: target.name,
     });
   };
 
-  const closeManagePlayer = () => {
-    setManagePlayerDraft(null);
-  };
+  const closeManagePlayer = () => setManagePlayerDraft(null);
 
-  const saveManagedPlayerName = () => {
-    if (!managePlayerDraft) return;
+  const saveManagedPlayerName = async () => {
+    if (!managePlayerDraft || !sessionId) return;
 
     const trimmedName = managePlayerDraft.name.trim();
-    const targetPlayer = players.find(
-      (player) => player.id === managePlayerDraft.playerId,
-    );
-    if (!targetPlayer) {
-      closeManagePlayer();
-      return;
-    }
-
     if (!trimmedName) {
       showSnackbar({
         title: 'ชื่อไม่ถูกต้อง',
@@ -877,75 +586,54 @@ export function HomePage() {
       return;
     }
 
-    if (trimmedName === targetPlayer.name) {
+    if (!managePlayerDraft.playerId) {
       closeManagePlayer();
       return;
     }
 
-    const isDuplicate = players.some(
-      (player) =>
-        player.id !== targetPlayer.id &&
-        player.name.toLowerCase() === trimmedName.toLowerCase(),
-    );
-    if (isDuplicate) {
+    const currentName = sessionPlayersRaw.find(
+      (sessionPlayer) => sessionPlayer.id === managePlayerDraft.sessionPlayerId,
+    )?.name;
+    if (trimmedName === currentName) {
+      closeManagePlayer();
+      return;
+    }
+
+    try {
+      await renamePlayer(managePlayerDraft.playerId, trimmedName);
+      await refreshAll(sessionId);
+      closeManagePlayer();
       showSnackbar({
-        title: 'ชื่อซ้ำ',
-        description: `มีผู้เล่นชื่อ "${trimmedName}" อยู่แล้ว`,
+        title: 'แก้ชื่อเรียบร้อย',
+        description: `${currentName} → ${trimmedName}`,
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'แก้ชื่อไม่สำเร็จ',
+        description: getErrorMessage(error),
         variant: 'error',
       });
-      return;
     }
-
-    setPlayers((prev) =>
-      prev.map((player) =>
-        player.id === targetPlayer.id
-          ? { ...player, name: trimmedName }
-          : player,
-      ),
-    );
-    setMatches((prev) =>
-      renamePlayerInMatches(prev, targetPlayer.id, trimmedName),
-    );
-    setNextMatches((prev) =>
-      renamePlayerInMatches(prev, targetPlayer.id, trimmedName),
-    );
-    setPendingSubstitute((prev) =>
-      prev?.playerId === targetPlayer.id
-        ? { ...prev, playerName: trimmedName }
-        : prev,
-    );
-
-    closeManagePlayer();
-    showSnackbar({
-      title: 'แก้ชื่อเรียบร้อย',
-      description: `${targetPlayer.name} → ${trimmedName}`,
-      variant: 'success',
-    });
   };
 
-  const deleteManagedPlayer = () => {
+  const deleteManagedPlayer = async () => {
     if (!managePlayerDraft) return;
-
-    const didRemove = removePlayer(managePlayerDraft.playerId);
-    if (didRemove) {
-      closeManagePlayer();
-    }
+    const didRemove = await removePlayer(managePlayerDraft.sessionPlayerId);
+    if (didRemove) closeManagePlayer();
   };
 
   const requestSubstitutePlayer = (id: string) => {
-    const targetPlayer = players.find((player) => player.id === id);
-    if (!targetPlayer) return;
+    const target = players.find((player) => player.id === id);
+    if (!target) return;
 
-    const activeMatch = matches.find(
-      (match) =>
-        match.status !== 'done' &&
-        [...match.teamA, ...match.teamB].some((player) => player.id === id),
+    const activeMatch = activeMatches.find((match) =>
+      [...match.teamA, ...match.teamB].some((player) => player.id === id),
     );
-
     if (!activeMatch) {
       showSnackbar({
         title: 'เปลี่ยนตัวไม่สำเร็จ',
-        description: `${targetPlayer.name} ไม่ได้อยู่ในแมตช์ปัจจุบัน`,
+        description: `${target.name} ไม่ได้อยู่ในแมตช์ปัจจุบัน`,
         variant: 'error',
       });
       return;
@@ -953,22 +641,26 @@ export function HomePage() {
 
     setPendingSubstitute({
       playerId: id,
-      playerName: targetPlayer.name,
+      playerName: target.name,
       court: activeMatch.court,
     });
   };
 
-  const confirmSubstitute = () => {
-    if (!pendingSubstitute) return;
+  const confirmSubstitute = async () => {
+    if (!pendingSubstitute || !sessionId) return;
 
     const target = pendingSubstitute;
-    const activeIds = new Set(
-      matches
-        .filter((match) => match.status !== 'done')
-        .flatMap((match) => [...match.teamA, ...match.teamB])
-        .map((player) => player.id),
-    );
+    const activeMatch = activeMatches.find((match) => match.court === target.court);
+    if (!activeMatch) {
+      setPendingSubstitute(null);
+      return;
+    }
 
+    const activeIds = new Set(
+      activeMatches.flatMap((match) =>
+        [...match.teamA, ...match.teamB].map((player) => player.id),
+      ),
+    );
     const candidatePool = players.filter(
       (player) => !activeIds.has(player.id) && player.id !== target.playerId,
     );
@@ -985,71 +677,172 @@ export function HomePage() {
     const replacement = rankCandidates(candidatePool)[0];
     if (!replacement) {
       setPendingSubstitute(null);
+      return;
+    }
+
+    try {
+      await substituteMatchPlayer(
+        sessionId,
+        activeMatch.matchId,
+        target.playerId,
+        replacement.id,
+      );
+      await refreshAll(sessionId);
+      setPendingSubstitute(null);
       showSnackbar({
-        title: 'สุ่มคนแทนไม่สำเร็จ',
-        description: 'ลองอีกครั้ง',
+        title: `แทนผู้เล่น Court ${target.court}`,
+        description: `${replacement.name} ลงแทน ${target.playerName} แล้ว (${target.playerName} ไปพัก)`,
+        variant: 'success',
+      });
+    } catch (error) {
+      setPendingSubstitute(null);
+      showSnackbar({
+        title: 'เปลี่ยนตัวไม่สำเร็จ',
+        description: getErrorMessage(error),
         variant: 'error',
+      });
+    }
+  };
+
+  // ---- match lifecycle ----
+
+  const updateMatchStatus = async (court: number, status: MatchStatus) => {
+    if (!sessionId) return;
+    const activeMatch = activeMatches.find((match) => match.court === court);
+    if (!activeMatch) return;
+
+    try {
+      await updateMatchStatusApi(sessionId, activeMatch.matchId, status);
+      await refreshAll(sessionId);
+    } catch (error) {
+      showSnackbar({
+        title: 'อัปเดตสถานะไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
+  };
+
+  const finishMatch = async (court: number) => {
+    if (!sessionId || !session) return;
+    const activeMatch = activeMatches.find((match) => match.court === court);
+    if (!activeMatch) return;
+
+    try {
+      await updateMatchStatusApi(sessionId, activeMatch.matchId, 'done');
+
+      if (session.activeCourts.includes(court)) {
+        const [freshPlayers, freshMatches, freshHistoryList] = await Promise.all([
+          listSessionPlayers(sessionId),
+          listMatches(sessionId),
+          getPartnerHistory(sessionId),
+        ]);
+        const freshHistory = Object.fromEntries(
+          freshHistoryList.map((entry) => [
+            entry.pairKey,
+            entry.timesPlayedTogether,
+          ]),
+        );
+        const activeIds = new Set(
+          freshMatches
+            .filter((match) => match.status !== 'done')
+            .flatMap((match) => [...match.teamA, ...match.teamB]),
+        );
+        const localPlayers = freshPlayers.map(toLocalPlayer);
+        const plan: SessionPlan = { mode: session.mode, courtIds: [court] };
+        const { newMatches } = buildMatchesFromPlayers(
+          localPlayers,
+          activeIds,
+          plan,
+          freshHistory,
+        );
+        const nextUp = newMatches.find((match) => match.court === court);
+
+        if (nextUp) {
+          await createMatch(sessionId, {
+            court,
+            mode: session.mode,
+            teamAIds: nextUp.teamA.map((player) => player.id),
+            teamBIds: nextUp.teamB.map((player) => player.id),
+          });
+        }
+      }
+
+      await refreshAll(sessionId);
+      showSnackbar({
+        title: `Court ${court} จบแมตช์แล้ว`,
+        description: 'อัปเดตสถานะเรียบร้อย',
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'จบแมตช์ไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
+  };
+
+  const undoLatestFinishByCourt = async (court: number) => {
+    if (!sessionId || !latestFinishedMatch || latestFinishedMatch.court !== court) {
+      showSnackbar({
+        title: 'ยังย้อนกลับคอร์ดนี้ไม่ได้',
+        description: 'ย้อนกลับได้เฉพาะคอร์ดที่กดจบล่าสุด',
+        variant: 'info',
       });
       return;
     }
 
-    const updatedMatches = matches.map((match) => ({
-      ...match,
-      teamA: match.teamA.map((player) =>
-        player.id === target.playerId ? replacement : player,
-      ),
-      teamB: match.teamB.map((player) =>
-        player.id === target.playerId ? replacement : player,
-      ),
-    }));
-
-    const updatedPlayers = players.map((player) =>
-      player.id === target.playerId
-        ? { ...player, queuedAt: Date.now() }
-        : player,
-    );
-    const preview = buildMatchesFromPlayers(
-      updatedPlayers,
-      getActivePlayerIds(updatedMatches),
-    );
-
-    setMatches(updatedMatches);
-    setPlayers(updatedPlayers);
-    setNextMatches(preview.newMatches);
-    setPendingSubstitute(null);
-
-    showSnackbar({
-      title: `แทนผู้เล่น Court ${target.court}`,
-      description: `${replacement.name} ลงแทน ${target.playerName} แล้ว (${target.playerName} ไปพัก)`,
-      variant: 'success',
-    });
+    try {
+      await undoMatchFinish(sessionId, latestFinishedMatch.id);
+      await refreshAll(sessionId);
+      toast.success('ย้อนกลับคอร์ดแล้ว', { duration: 2500 });
+    } catch (error) {
+      showSnackbar({
+        title: 'ย้อนกลับไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
   };
 
-  const handleModeChange = (nextMode: Mode) => {
-    setMode(nextMode);
-    setNextPlan(null);
+  const closeCourtNow = async (court: number) => {
+    if (!sessionId) return;
+
+    try {
+      await closeCourtApi(sessionId, court);
+      await refreshAll(sessionId);
+      showSnackbar({
+        title: `ปิด Court ${court} แล้ว`,
+        description: 'ย้ายผู้เล่นเข้าคิวรวมกับคอร์ดที่เหลือแล้ว',
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'ปิดคอร์ดไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
   };
 
-  const handleCourtCountChange = (nextCourts: number) => {
-    const normalizedCourts = Math.min(Math.max(nextCourts, 1), MAX_COURTS);
+  const requestCloseCourt = (court: number) => setPendingCourtClose(court);
 
-    setCourts(normalizedCourts);
-    setActiveCourtIds(getCourtIds(normalizedCourts));
-    setNextPlan(null);
+  const confirmCloseCourt = async () => {
+    if (pendingCourtClose === null) return;
+    const court = pendingCourtClose;
+    setPendingCourtClose(null);
+    await closeCourtNow(court);
   };
+
+  // ---- plan editor ("ปรับรอบถัดไป") ----
 
   const openPlanEditor = () => {
-    const basePlan = nextPlan ?? currentPlan;
-
-    setPlanDraft({
-      mode: basePlan.mode,
-      courtIds: [...basePlan.courtIds],
-    });
+    if (!session) return;
+    setPlanDraft({ mode: session.mode, courtIds: [...session.activeCourts] });
   };
 
-  const closePlanEditor = () => {
-    setPlanDraft(null);
-  };
+  const closePlanEditor = () => setPlanDraft(null);
 
   const setPlanDraftMode = (nextMode: Mode) => {
     setPlanDraft((prev) => (prev ? { ...prev, mode: nextMode } : prev));
@@ -1058,20 +851,15 @@ export function HomePage() {
   const togglePlanDraftCourt = (courtId: number) => {
     setPlanDraft((prev) => {
       if (!prev) return prev;
-
       const nextCourtIds = prev.courtIds.includes(courtId)
         ? prev.courtIds.filter((id) => id !== courtId)
         : [...prev.courtIds, courtId];
-
-      return {
-        ...prev,
-        courtIds: nextCourtIds.toSorted((a, b) => a - b),
-      };
+      return { ...prev, courtIds: nextCourtIds.toSorted((a, b) => a - b) };
     });
   };
 
-  const saveNextPlan = () => {
-    if (!planDraft) return;
+  const saveNextPlan = async () => {
+    if (!planDraft || !sessionId) return;
 
     if (planDraft.courtIds.length === 0) {
       showSnackbar({
@@ -1082,43 +870,50 @@ export function HomePage() {
       return;
     }
 
-    const plan: SessionPlan = {
-      mode: planDraft.mode,
-      courtIds: normalizeCourtIds(planDraft.courtIds, courts),
-    };
-    const planPlayersPerMatch = getPlayersPerMatch(plan.mode);
-    const planRequiredPlayers = planPlayersPerMatch * plan.courtIds.length;
-
+    const planPlayersPerMatch = getPlayersPerMatch(planDraft.mode);
+    const planRequiredPlayers = planPlayersPerMatch * planDraft.courtIds.length;
     if (players.length < planRequiredPlayers) {
       showSnackbar({
         title: 'ผู้เล่นไม่พอสำหรับแผนใหม่',
-        description: `ต้องมีอย่างน้อย ${planRequiredPlayers} คนสำหรับ ${formatCourtLabel(plan.courtIds)} · ${formatModeLabel(plan.mode)}`,
+        description: `ต้องมีอย่างน้อย ${planRequiredPlayers} คนสำหรับ ${formatCourtLabel(planDraft.courtIds)} · ${formatModeLabel(planDraft.mode)}`,
         variant: 'error',
       });
       return;
     }
 
-    pushUndo('เปลี่ยนแผนรอบถัดไป', 'plan');
-
-    const activeIds = getActivePlayerIds(matches);
-    const preview = buildMatchesFromPlayers(players, activeIds, plan);
-
-    setMode(plan.mode);
-    setCourts(plan.courtIds.length);
-    setActiveCourtIds(plan.courtIds);
-    setNextPlan(plan);
-    setNextMatches(preview.newMatches);
-    setPlanDraft(null);
-
-    showSnackbar({
-      title: 'เปลี่ยนแผนรอบถัดไปแล้ว',
-      description: 'คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว',
-      variant: 'success',
-    });
+    try {
+      await updateSession(sessionId, {
+        mode: planDraft.mode,
+        activeCourts: planDraft.courtIds,
+      });
+      await refreshAll(sessionId);
+      setPlanDraft(null);
+      showSnackbar({
+        title: 'เปลี่ยนแผนรอบถัดไปแล้ว',
+        description: 'คู่ถัดไปเดิมถูกจัดใหม่ตามแผนใหม่แล้ว',
+        variant: 'success',
+      });
+    } catch (error) {
+      showSnackbar({
+        title: 'เปลี่ยนแผนไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
+    }
   };
 
-  const generateMatches = () => {
-    if (matches.length > 0) {
+  // ---- first round ----
+
+  const handleModeChange = (nextMode: Mode) => setDraftMode(nextMode);
+
+  const handleCourtCountChange = (nextCourts: number) => {
+    setDraftCourts(Math.min(Math.max(nextCourts, 1), MAX_COURTS));
+  };
+
+  const generateMatches = async () => {
+    if (!sessionId) return;
+
+    if (activeMatches.length > 0) {
       showSnackbar({
         title: 'กำลังแข่งขันอยู่',
         description: 'ระบบจะเลื่อนแมตช์ถัดไปให้อัตโนมัติเมื่อจบครบทุกคอร์ด',
@@ -1130,159 +925,241 @@ export function HomePage() {
     if (players.length < playersPerMatch) {
       showSnackbar({
         title: 'ผู้เล่นไม่พอ',
-        description: `ต้องมีอย่างน้อย ${playersPerMatch} คนสำหรับ ${mode === 'singles' ? 'Singles' : 'Doubles'}`,
+        description: `ต้องมีอย่างน้อย ${playersPerMatch} คนสำหรับ ${draftMode === 'singles' ? 'Singles' : 'Doubles'}`,
         variant: 'error',
       });
       return;
     }
 
-    const startPlan: SessionPlan = {
-      mode,
-      courtIds: normalizeCourtIds(
-        activeCourtIds.length > 0 ? activeCourtIds : getCourtIds(courts),
-        courts,
-      ),
-    };
-    const currentRound = buildMatchesFromPlayers(
-      players,
-      new Set(),
-      startPlan,
-    );
-    if (currentRound.newMatches.length === 0) {
+    const courtIds = getCourtIds(draftCourts);
+
+    try {
+      await updateSession(sessionId, { mode: draftMode, activeCourts: courtIds });
+
+      const [freshPlayers, freshHistoryList] = await Promise.all([
+        listSessionPlayers(sessionId),
+        getPartnerHistory(sessionId),
+      ]);
+      const freshHistory = Object.fromEntries(
+        freshHistoryList.map((entry) => [entry.pairKey, entry.timesPlayedTogether]),
+      );
+      const localPlayers = freshPlayers.map(toLocalPlayer);
+      const plan: SessionPlan = { mode: draftMode, courtIds };
+      const { newMatches } = buildMatchesFromPlayers(
+        localPlayers,
+        new Set(),
+        plan,
+        freshHistory,
+      );
+
+      if (newMatches.length === 0) {
+        showSnackbar({
+          title: 'จับคู่ไม่สำเร็จ',
+          description: 'ผู้เล่นไม่พอสำหรับคอร์ดที่เลือก',
+          variant: 'error',
+        });
+        return;
+      }
+
+      for (const match of newMatches) {
+        await createMatch(sessionId, {
+          court: match.court,
+          mode: match.mode,
+          teamAIds: match.teamA.map((player) => player.id),
+          teamBIds: match.teamB.map((player) => player.id),
+        });
+      }
+
+      await refreshAll(sessionId);
+
+      if (newMatches.length < courtIds.length) {
+        showSnackbar({
+          title: `จับคู่ได้ ${newMatches.length}/${courtIds.length} คอร์ด`,
+          description: 'เพิ่มผู้เล่นเพื่อใช้ทุกคอร์ด',
+          variant: 'info',
+        });
+        return;
+      }
+
+      toast.dismiss();
+    } catch (error) {
       showSnackbar({
         title: 'จับคู่ไม่สำเร็จ',
-        description: 'ผู้เล่นไม่พอสำหรับคอร์ดที่เลือก',
+        description: getErrorMessage(error),
         variant: 'error',
       });
-      return;
     }
+  };
 
-    const activeAfterIds = getActivePlayerIds(currentRound.newMatches);
-    const preview = buildMatchesFromPlayers(players, activeAfterIds, startPlan);
+  const resetStats = async () => {
+    if (!sessionId) return;
 
-    setPlayers(players);
-    setMatches(currentRound.newMatches);
-    setNextMatches(preview.newMatches);
-    setActiveCourtIds(startPlan.courtIds);
-    setNextPlan(null);
-
-    if (currentRound.newMatches.length < startPlan.courtIds.length) {
+    try {
+      await resetSessionStats(sessionId);
+      await refreshAll(sessionId);
       showSnackbar({
-        title: `จับคู่ได้ ${currentRound.newMatches.length}/${startPlan.courtIds.length} คอร์ด`,
-        description: 'เพิ่มผู้เล่นเพื่อใช้ทุกคอร์ด',
-        variant: 'info',
+        title: 'รีเซ็ตเรียบร้อย',
+        description: 'ล้างสถิติและแมตช์ทั้งหมด',
+        variant: 'success',
       });
-      return;
+    } catch (error) {
+      showSnackbar({
+        title: 'รีเซ็ตไม่สำเร็จ',
+        description: getErrorMessage(error),
+        variant: 'error',
+      });
     }
-
-    toast.dismiss();
   };
 
-  const resetStats = () => {
-    const now = Date.now();
-    setPlayers(
-      players.map((player) => ({ ...player, matches: 0, queuedAt: now })),
-    );
-    setMatches([]);
-    setNextMatches([]);
-    setActiveCourtIds(getCourtIds(courts));
-    setNextPlan(null);
-    setPlanDraft(null);
-    setTotalFinishedMatches(0);
-    setPartnerHistory({});
-    setUndoStack([]);
-    showSnackbar({
-      title: 'รีเซ็ตเรียบร้อย',
-      description: 'ล้างสถิติและแมตช์ทั้งหมด',
-      variant: 'success',
-    });
-  };
-
-  const clearAll = () => {
-    removeMode();
-    removeCourts();
-    removePlayers();
-    removeMatches();
-    removeNextMatches();
-    removeActiveCourtIds();
-    removeNextPlan();
-    removeTotalFinishedMatches();
-    removePartnerHistory();
-    setPlanDraft(null);
-    setUndoStack([]);
-    toast.dismiss();
-  };
-
-  const requestClearAll = () => {
-    setIsClearAllConfirmOpen(true);
-  };
+  const requestClearAll = () => setIsClearAllConfirmOpen(true);
 
   const confirmClearAll = () => {
-    clearAll();
+    forgetSession();
     setIsClearAllConfirmOpen(false);
   };
 
   const managedPlayer = managePlayerDraft
-    ? players.find((player) => player.id === managePlayerDraft.playerId)
+    ? players.find((player) => player.id === managePlayerDraft.sessionPlayerId)
     : null;
   const managedPlayerActiveMatch = managedPlayer
-    ? matches.find(
-        (match) =>
-          match.status !== 'done' &&
-          [...match.teamA, ...match.teamB].some(
-            (player) => player.id === managedPlayer.id,
-          ),
+    ? activeMatches.find((match) =>
+        [...match.teamA, ...match.teamB].some(
+          (player) => player.id === managedPlayer.id,
+        ),
       )
     : null;
 
-  // const openHowToUse = () => {
-  //   showSnackbar({
-  //     title: 'วิธีการใช้งาน',
-  //     description: 'เตรียมปุ่มนี้ไว้สำหรับเปิด modal ในเวอร์ชันถัดไป',
-  //     variant: 'info',
-  //   });
-  // };
+  // ---- render ----
 
-  // const openDonate = () => {
-  //   showSnackbar({
-  //     title: 'Buy coffee (Donate)',
-  //     description: 'เตรียมเชื่อมลิงก์โดเนตในเวอร์ชันถัดไป',
-  //     variant: 'info',
-  //   });
-  // };
+  if (view === 'loading') {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-gradient-surface">
+        <Icon
+          icon="mdi:badminton"
+          width="32"
+          height="32"
+          className="animate-shuttle text-primary"
+        />
+      </div>
+    );
+  }
 
-  // const shareApp = async () => {
-  //   const shareData = {
-  //     title: 'Badminton Matcher',
-  //     text: 'ลองใช้ Badminton Matcher สำหรับจัดคู่แบดมินตัน',
-  //     url: globalThis.window.location.href,
-  //   };
+  if (view === 'create') {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-gradient-surface px-4">
+        <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-soft">
+          <div className="mb-5 flex items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-secondary shadow-dark">
+              <Icon
+                icon="mdi:badminton"
+                width="20"
+                height="20"
+                className="text-primary"
+              />
+            </div>
+            <div>
+              <h1 className="font-display text-base font-extrabold text-foreground">
+                Badminton Matcher
+              </h1>
+              <p className="text-xs text-muted-foreground">สร้าง session ใหม่</p>
+            </div>
+          </div>
 
-  // try {
-  //   if (globalThis.navigator.share) {
-  //     await globalThis.navigator.share(shareData);
-  //     showSnackbar({
-  //       title: 'แชร์เรียบร้อย',
-  //       description: 'ส่งลิงก์แอปให้เพื่อนแล้ว',
-  //       variant: 'success',
-  //     });
-  //     return;
-  //   }
+          <div className="space-y-5">
+            <ModeSelector value={createMode} onChange={setCreateMode} />
+            <CourtSelector value={createCourts} onChange={setCreateCourts} />
 
-  //   await globalThis.navigator.clipboard.writeText(shareData.url);
-  //   showSnackbar({
-  //     title: 'คัดลอกลิงก์แล้ว',
-  //     description: 'วางลิงก์เพื่อแชร์ต่อได้เลย',
-  //     variant: 'info',
-  //   });
-  // } catch {
-  //   showSnackbar({
-  //     title: 'แชร์ไม่สำเร็จ',
-  //     description: 'ลองอีกครั้งหรือคัดลอก URL จากเบราว์เซอร์',
-  //     variant: 'error',
-  //   });
-  // }
-  // };
+            <div className="space-y-2">
+              <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                ตั้ง PIN สำหรับแอดมิน (4-6 หลัก)
+              </p>
+              <Input
+                value={createPin}
+                onChange={(event) =>
+                  setCreatePin(event.target.value.replace(/\D/g, '').slice(0, 6))
+                }
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    handleCreateSession();
+                  }
+                }}
+                inputMode="numeric"
+                placeholder="เช่น 1234"
+                className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+              />
+              <p className="text-xs text-muted-foreground">
+                ใครมี PIN นี้จะจับคู่/จบแมตช์/ปิดคอร์ดได้ เก็บไว้ให้ทีมงานเท่านั้น
+              </p>
+            </div>
+
+            <Button
+              type="button"
+              onClick={handleCreateSession}
+              disabled={isCreatingSession}
+              className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
+            >
+              {isCreatingSession ? 'กำลังสร้าง...' : 'สร้าง session'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'pin') {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-gradient-surface px-4">
+        <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-soft">
+          <h1 className="font-display text-lg font-extrabold text-foreground">
+            ใส่ PIN เพื่อเข้าใช้งาน
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {session ? `${formatModeLabel(session.mode)} · สร้างไว้ก่อนหน้านี้` : ''}
+          </p>
+
+          <div className="mt-5 space-y-2">
+            <Input
+              value={pinInput}
+              onChange={(event) => {
+                setPinInput(event.target.value.replace(/\D/g, '').slice(0, 6));
+                setPinError(null);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleVerifyPin();
+                }
+              }}
+              inputMode="numeric"
+              placeholder="PIN"
+              className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+            />
+            {pinError && (
+              <p className="text-xs font-medium text-destructive">{pinError}</p>
+            )}
+          </div>
+
+          <Button
+            type="button"
+            onClick={handleVerifyPin}
+            disabled={isVerifyingPin || pinInput.length === 0}
+            className="mt-4 h-12 w-full rounded-2xl bg-primary font-display font-extrabold text-primary-foreground hover:bg-primary/90"
+          >
+            {isVerifyingPin ? 'กำลังตรวจสอบ...' : 'เข้าใช้งาน'}
+          </Button>
+
+          <button
+            type="button"
+            onClick={forgetSession}
+            className="mt-4 w-full text-center text-xs font-medium text-muted-foreground underline underline-offset-2"
+          >
+            ไม่ใช่ session นี้ เริ่ม session ใหม่
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-dvh bg-gradient-surface pb-24">
@@ -1311,7 +1188,6 @@ export function HomePage() {
                     saveManagedPlayerName();
                     return;
                   }
-
                   if (event.key === 'Escape') {
                     event.preventDefault();
                     closeManagePlayer();
@@ -1435,10 +1311,7 @@ export function HomePage() {
             </p>
 
             <div className="mt-5 space-y-5">
-              <ModeSelector
-                value={planDraft.mode}
-                onChange={setPlanDraftMode}
-              />
+              <ModeSelector value={planDraft.mode} onChange={setPlanDraftMode} />
 
               <div className="space-y-2">
                 <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1447,7 +1320,6 @@ export function HomePage() {
                 <div className="grid grid-cols-3 gap-2">
                   {getCourtIds(MAX_COURTS).map((courtId) => {
                     const active = planDraft.courtIds.includes(courtId);
-
                     return (
                       <Button
                         key={courtId}
@@ -1502,10 +1374,11 @@ export function HomePage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
             <h3 className="font-display text-lg font-extrabold text-foreground">
-              ยืนยันล้างทั้งหมด
+              ยืนยันออกจาก session นี้
             </h3>
             <p className="mt-2 text-sm text-muted-foreground">
-              การดำเนินการนี้จะลบผู้เล่น แมตช์ และสถิติทั้งหมดทันที
+              จะไม่ลบข้อมูลบนเซิร์ฟเวอร์ แค่ลืม session นี้บนเครื่องนี้เท่านั้น
+              ครั้งหน้าจะต้องสร้างหรือเข้า session ใหม่
             </p>
             <div className="mt-5 flex items-center justify-end gap-2">
               <Button
@@ -1521,7 +1394,7 @@ export function HomePage() {
                 onClick={confirmClearAll}
                 className="rounded-xl bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                ล้างทั้งหมด
+                ออกจาก session
               </Button>
             </div>
           </div>
@@ -1567,16 +1440,16 @@ export function HomePage() {
               กับจำนวนคอร์ด
             </p>
             <ModeSelector
-              value={mode}
+              value={displayMode}
               onChange={handleModeChange}
-              disabled={matches.length > 0}
+              disabled={activeMatches.length > 0}
             />
             <CourtSelector
-              value={courts}
+              value={displayCourts}
               onChange={handleCourtCountChange}
-              disabled={matches.length > 0}
+              disabled={activeMatches.length > 0}
             />
-            {matches.length > 0 && (
+            {activeMatches.length > 0 && (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">
                   กำลังเล่นอยู่ ให้ใช้ปุ่ม “ปรับรอบถัดไป”
@@ -1596,7 +1469,7 @@ export function HomePage() {
             <Button
               type="button"
               onClick={generateMatches}
-              disabled={players.length < playersPerMatch || matches.length > 0}
+              disabled={players.length < playersPerMatch || activeMatches.length > 0}
               className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
             >
               เริ่มจับคู่
@@ -1604,11 +1477,11 @@ export function HomePage() {
           </div>
         </section>
 
-        {matches.length > 0 && (
+        {activeMatches.length > 0 && (
           <section className="rounded-3xl border border-border/70 bg-card p-4 sm:p-6">
             <MatchBoard
-              matches={matches}
-              mode={mode}
+              matches={activeMatches}
+              mode={displayMode}
               nextMatches={nextMatches}
               restingPlayers={stats.restingPlayers}
               onStatusChange={updateMatchStatus}
@@ -1617,8 +1490,6 @@ export function HomePage() {
               onSubstitutePlayer={requestSubstitutePlayer}
               undoableCourtId={undoableCourtId}
               onUndoCourtFinish={undoLatestFinishByCourt}
-              canUndoPlanLatest={canUndoLatestPlan}
-              onUndoPlanLatest={undoLatestPlan}
               onOpenPlanEditor={openPlanEditor}
             />
             <div className="mt-4 rounded-2xl border border-border/60 bg-muted/35 px-3 py-2.5">

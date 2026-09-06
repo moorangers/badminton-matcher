@@ -29,6 +29,26 @@ export async function findActiveMatchForPlayers(
   return MatchModel.findOne(query);
 }
 
+/** Finds an active (non-done) match already on this court — used so
+ * undo-finish can refuse to revive a match onto a court that already has
+ * a newer active match (e.g. finishMatch's auto-fill already ran). */
+export async function findActiveMatchForCourt(
+  sessionId: string,
+  court: number,
+  excludeMatchId?: string,
+) {
+  const query: Record<string, unknown> = {
+    sessionId,
+    court,
+    status: { $ne: 'done' },
+  };
+  if (excludeMatchId) {
+    query._id = { $ne: excludeMatchId };
+  }
+
+  return MatchModel.findOne(query);
+}
+
 const teamIdsOf = (match: MatchDoc) => ({
   teamAIds: match.teamA.map((playerId) => playerId.toString()),
   teamBIds: match.teamB.map((playerId) => playerId.toString()),

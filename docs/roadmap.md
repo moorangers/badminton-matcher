@@ -6,7 +6,7 @@
 
 ## Phase 0 — Backend Foundation
 
-**สถานะ:** in-progress (foundation + matches/partnerHistory endpoints ทำงานได้แล้ว 2026-09-06, ยังไม่ได้ย้าย UI เดิมมาเรียก API)
+**สถานะ:** done (2026-09-06) — เหลือแค่ deploy MongoDB จริงสำหรับ production เป็น follow-up นอก scope เดิม
 **ทำไมต้องทำ:** ทุกฟีเจอร์ multi-device (เช็คอินคนละเครื่อง, webboard, live score, QR check-in) เป็นไปไม่ได้บนสถาปัตยกรรม client-only + localStorage ปัจจุบัน — ดู [decision-log.md#adr-001](./decision-log.md)
 
 - [x] ตัดสินใจเรื่อง multi-tenant: 1 deployment ต่อ 1 ชมรม ([decision-log.md#adr-006](./decision-log.md))
@@ -17,25 +17,25 @@
 - [x] API Routes พื้นฐาน: `GET/POST /api/sessions`, `POST /api/sessions/:id/verify-pin`, `GET/POST /api/sessions/:id/players` — ทดสอบ end-to-end กับ MongoDB จริงแล้ว (สร้าง session, verify pin ถูก/ผิด, เพิ่มผู้เล่น, กันชื่อซ้ำ case-insensitive)
 - [x] API สำหรับ `matches`: `GET/POST /api/sessions/:id/matches`, `PATCH /api/sessions/:id/matches/:matchId` — บังคับกฎ 1 คนไม่อยู่ 2 แมตช์พร้อมกัน, 1 คอร์ดมีได้แค่ 1 แมตช์ที่ยังไม่จบ, `done` จะ bump `matchesPlayedInSession` + partner history ให้อัตโนมัติ (ทดสอบ end-to-end กับ MongoDB จริงแล้ว)
 - [x] API สำหรับ `partnerHistory`: `GET /api/sessions/:id/partner-history` (resolve ชื่อผู้เล่นคืนมาด้วย, เขียนได้ทางเดียวผ่าน side-effect ตอนจบแมตช์เท่านั้น ไม่มี endpoint เขียนตรง)
-- [ ] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — งานก้อนใหญ่ที่ยังไม่เริ่ม (algorithm การจับคู่/เลือกทีมยังอยู่ฝั่ง client เหมือนเดิม backend แค่เก็บผลลัพธ์)
+- [x] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — เสร็จแล้ว (2026-09-06) รวม session bootstrap (สร้าง/PIN gate), algorithm การจับคู่ยังอยู่ฝั่ง client เหมือนเดิม (อ่าน/เขียนผ่าน API แทน localStorage), ลบ `useLocalStorage.ts` ที่ไม่ใช้แล้วออก, ทดสอบ end-to-end ผ่าน Playwright จริง (สร้าง session → เพิ่มผู้เล่น → จับคู่ → เริ่ม/จบแมตช์ → auto-fill → substitute → ปิดคอร์ด → reload+PIN แล้วข้อมูลยังอยู่ครบ) ไม่มี console error
 - [ ] Deploy MongoDB จริงสำหรับ production (ตอนนี้ dev ใช้ container ในเครื่องเท่านั้น ยังไม่มีแผน production DB)
 
 ## Phase 1 — แก้ Matching Fairness + Court Merge
 
-**สถานะ:** in-progress (manual ส่วน client-side เสร็จแล้ว 2026-09-06, เหลือ auto-trigger ที่รอ Phase 0)
+**สถานะ:** in-progress (manual ส่วน client-side เสร็จแล้ว 2026-09-06, ตอนนี้ผูกกับ MongoDB ผ่าน Phase 0 แล้ว เหลือแค่ auto-trigger)
 **Dependency:** ไม่ต้องรอ Phase 0 เสร็จ (เป็น pure logic) — bundle 2 ฟีเจอร์นี้เพราะอยู่ใน matching engine เดียวกัน (ดู [decision-log.md#adr-005](./decision-log.md))
 
 - [x] เพิ่ม `queuedAt` เป็น tie-breaker รองจากจำนวนแมตช์ (คนรอนานกว่าได้คิวก่อน) — แก้ปัญหา "มาคอร์สไม่พร้อมกัน อยากแฟร์กับคนมาก่อน"
 - [x] เพิ่ม partner-history penalty ตอนสุ่มจับคู่ — แก้ปัญหา "คู่แทบไม่เปลี่ยนเลย"
 - [x] ปุ่ม "ปิดคอร์ด/รวมคอร์ด" แบบ manual — คอร์ดที่ถูกปิด: match ที่กำลังเล่นจบทันที คนไปรวมคิวคอร์ดที่เหลือ (แก้ปัญหา "จองคอร์ด 1hr/2hr")
-- [ ] (รอ Phase 0) auto-trigger รวมคอร์ดตามเวลาจองจริง แทน manual
+- [ ] auto-trigger รวมคอร์ดตามเวลาจองจริง แทน manual (ต้องเพิ่ม `courtBookings.endTime` ตาม [database-design.md](./database-design.md) ที่ยังไม่ implement)
 - รายละเอียด logic เดิม vs ที่เสนอใหม่ ดู [matching-algorithm.md](./matching-algorithm.md)
 - ยังไม่ได้ bump version/CHANGELOG สำหรับงานนี้ — รอ confirm จากผู้ใช้ก่อน
 
 ## Phase 2 — เช็คอิน 2 ขั้น + QR Self Check-in
 
-**สถานะ:** not-started
-**Dependency:** Phase 0 (ต้อง multi-device เห็น session เดียวกัน)
+**สถานะ:** not-started (unblocked — Phase 0 เสร็จแล้ว)
+**Dependency:** Phase 0 (ต้อง multi-device เห็น session เดียวกัน) ✅
 
 - [ ] แยกสถานะผู้เล่น: `registered` → `checked_in` → เข้า pool สุ่มได้
 - [ ] หน้าเช็คอินสำหรับผู้เล่น (มือถือตัวเอง)
@@ -45,7 +45,7 @@
 ## Phase 3 — Webboard / Post Report
 
 **สถานะ:** not-started
-**Dependency:** Phase 0 + เลือก file storage (Vercel Blob/Cloudinary/S3 — ยังไม่ confirm)
+**Dependency:** Phase 0 ✅ + เลือก file storage (Vercel Blob/Cloudinary/S3 — ยังไม่ confirm)
 
 - [ ] โพสต์ข้อความ + รูปภาพต่อ session/club
 - [ ] หน้า feed แสดงโพสต์ย้อนหลัง
@@ -54,7 +54,7 @@
 ## Phase 4 — ระบบนับคะแนน + Live Scoreboard
 
 **สถานะ:** not-started
-**Dependency:** Phase 0 + เลือก realtime layer (ยังไม่ confirm — ดู open question ใน [architecture-design.md](./architecture-design.md))
+**Dependency:** Phase 0 ✅ + เลือก realtime layer (ยังไม่ confirm — ดู open question ใน [architecture-design.md](./architecture-design.md))
 
 - [ ] UI นับคะแนนต่อแมตช์ (ใช้ได้ทั้ง casual play และ tournament mode)
 - [ ] หน้า display แยกสำหรับขึ้นจอ/โปรเจกเตอร์ อัปเดตสดไม่ต้อง refresh

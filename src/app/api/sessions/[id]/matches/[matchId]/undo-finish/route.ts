@@ -4,6 +4,7 @@ import { connectToDatabase } from '@/lib/db/mongodb';
 import { MatchModel } from '@/lib/db/models/match';
 import {
   findActiveMatchForPlayers,
+  findActiveMatchForCourt,
   revertMatchFinishStats,
 } from '@/lib/db/services/matchLifecycle';
 
@@ -40,6 +41,20 @@ export async function POST(
       {
         error:
           'undo ไม่ได้ เพราะผู้เล่นบางคนถูกจัดลงแมตช์อื่นไปแล้วหลังจากจบแมตช์นี้',
+      },
+      { status: 409 },
+    );
+  }
+
+  const courtAlreadyReused = await findActiveMatchForCourt(
+    id,
+    match.court,
+    matchId,
+  );
+  if (courtAlreadyReused) {
+    return NextResponse.json(
+      {
+        error: `undo ไม่ได้ เพราะ Court ${match.court} มีแมตช์ใหม่เริ่มไปแล้วหลังจากจบแมตช์นี้`,
       },
       { status: 409 },
     );
