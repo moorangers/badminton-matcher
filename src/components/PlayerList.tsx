@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from 'react';
-import { Plus, SquarePen, UserCircle2 } from 'lucide-react';
+import { Loader2, Plus, SquarePen, UserCircle2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,12 +15,14 @@ interface PlayerListProps {
   players: Player[];
   onAddMany: (names: string[]) => void;
   onManage: (id: string) => void;
+  isAdding?: boolean;
 }
 
 export const PlayerList = ({
   players,
   onAddMany,
   onManage,
+  isAdding = false,
 }: PlayerListProps) => {
   const [name, setName] = useState('');
 
@@ -68,10 +70,14 @@ export const PlayerList = ({
         <Button
           type="button"
           onClick={handleAdd}
-          disabled={!name.trim()}
+          disabled={!name.trim() || isAdding}
           className="h-12 shrink-0 rounded-xl bg-secondary px-4 font-display font-bold text-secondary-foreground shadow-dark hover:bg-secondary/90"
         >
-          <Plus className="h-4 w-4" />
+          {isAdding ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Plus className="h-4 w-4" />
+          )}
           เพิ่ม
         </Button>
       </div>

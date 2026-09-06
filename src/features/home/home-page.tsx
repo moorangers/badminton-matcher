@@ -6,7 +6,11 @@ import { Icon } from '@iconify/react';
 import {
   ChevronRight,
   HelpCircle,
+  KeyRound,
+  Link2,
+  Loader2,
   LogOut,
+  Menu,
   Newspaper,
   Plus,
   Share2,
@@ -38,6 +42,7 @@ import { cn } from '@/lib/utils';
 import {
   ApiError,
   addSessionPlayers,
+  changeSessionPin,
   checkInToSession,
   closeCourt as closeCourtApi,
   createMatch,
@@ -157,6 +162,15 @@ export function HomePage() {
   const [pinError, setPinError] = useState<string | null>(null);
   const [isVerifyingPin, setIsVerifyingPin] = useState(false);
 
+  // ---- unlocking a session picked from the "existing sessions" list, as a
+  // modal on top of the create screen (see pickExistingSession) ----
+  const [unlockingSession, setUnlockingSession] = useState<ApiSession | null>(
+    null,
+  );
+  const [unlockPinInput, setUnlockPinInput] = useState('');
+  const [unlockPinError, setUnlockPinError] = useState<string | null>(null);
+  const [isUnlockingSession, setIsUnlockingSession] = useState(false);
+
   // ---- server-backed data ----
   const [sessionPlayersRaw, setSessionPlayersRaw] = useState<
     ApiSessionPlayer[]
@@ -182,7 +196,42 @@ export function HomePage() {
   );
   const [planDraft, setPlanDraft] = useState<PlanDraft | null>(null);
   const [isClearAllConfirmOpen, setIsClearAllConfirmOpen] = useState(false);
+  // header nav links collapse into this on mobile — reused across the
+  // 'create' and 'dashboard' headers since only one is ever mounted at once
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const manageNameInputRef = useRef<HTMLInputElement>(null);
+
+  // ---- change PIN ----
+  const [isChangePinModalOpen, setIsChangePinModalOpen] = useState(false);
+  const [changePinCurrent, setChangePinCurrent] = useState('');
+  const [changePinNew, setChangePinNew] = useState('');
+  const [isChangingPin, setIsChangingPin] = useState(false);
+
+  // ---- private quick-access link (embeds the PIN so opening it skips the
+  // PIN gate entirely) — kept separate from the public checkin QR link,
+  // which is meant to be shared with every player and must never carry
+  // the admin PIN ----
+  const [isQuickLinkModalOpen, setIsQuickLinkModalOpen] = useState(false);
+  const [quickLinkPin, setQuickLinkPin] = useState('');
+  const [quickAccessUrl, setQuickAccessUrl] = useState('');
+  const [isGeneratingQuickLink, setIsGeneratingQuickLink] = useState(false);
+
+  // ---- loading state for actions that hit the network (mongo can add a
+  // beat of latency, unlike the old localStorage version — show feedback
+  // rather than let a button look unresponsive) ----
+  const [isGeneratingMatches, setIsGeneratingMatches] = useState(false);
+  const [isAddingPlayers, setIsAddingPlayers] = useState(false);
+  const [deletingPlayerId, setDeletingPlayerId] = useState<string | null>(null);
+  const [checkingInPlayerId, setCheckingInPlayerId] = useState<string | null>(
+    null,
+  );
+  const [isSavingPlayerName, setIsSavingPlayerName] = useState(false);
+  const [isSubstituting, setIsSubstituting] = useState(false);
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [isResettingStats, setIsResettingStats] = useState(false);
+  const [pendingCourtAction, setPendingCourtAction] = useState<number | null>(
+    null,
+  );
 
   const view: ViewState = !bootstrapped
     ? 'loading'
@@ -213,9 +262,21 @@ export function HomePage() {
     toast(title, options);
   };
 
-  // ---- bootstrap: read stored session id, validate it against the server ----
+  // ---- bootstrap: read stored session id, validate it against the server.
+  // Also supports a private "quick-access" link (?sid=...&pin=...) that
+  // skips the PIN gate entirely — see openQuickLinkModal/generateQuickAccessLink. ----
   useEffect(() => {
-    const stored = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const params = new URLSearchParams(window.location.search);
+    const quickSid = params.get('sid');
+    const quickPin = params.get('pin');
+
+    if (quickSid && quickPin) {
+      // strip immediately: don't leave the PIN sitting in the visible URL,
+      // and don't let a later refresh of this same tab keep resubmitting it
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+
+    const stored = quickSid || window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (!stored) {
       setBootstrapped(true);
       return;
@@ -226,11 +287,22 @@ export function HomePage() {
       try {
         const fetched = await getSession(stored);
         if (cancelled) return;
+        window.localStorage.setItem(SESSION_STORAGE_KEY, stored);
         setSessionId(stored);
         setSession(fetched);
         setDraftMode(fetched.mode);
         setDraftCourts(fetched.activeCourts.length);
         setDraftTargetScore(fetched.targetScore);
+
+        if (quickSid && quickPin) {
+          try {
+            await verifySessionPin(stored, quickPin);
+            if (!cancelled) setIsAuthenticated(true);
+          } catch {
+            // stale/wrong PIN embedded in the link — just fall back to the
+            // normal PIN gate rather than surfacing an error
+          }
+        }
       } catch {
         if (cancelled) return;
         window.localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -369,19 +441,23 @@ export function HomePage() {
 
   const totalFinishedMatches = useMemo(
     () =>
-      matchesRaw.filter((match) => match.status === 'done' && match.statsCounted)
-        .length,
+      matchesRaw.filter(
+        (match) => match.status === 'done' && match.statsCounted,
+      ).length,
     [matchesRaw],
   );
 
   const latestFinishedMatch = useMemo(() => {
     const doneWithStats = matchesRaw.filter(
-      (match) => match.status === 'done' && match.statsCounted && match.finishedAt,
+      (match) =>
+        match.status === 'done' && match.statsCounted && match.finishedAt,
     );
     if (doneWithStats.length === 0) return null;
 
     return doneWithStats.reduce((latest, match) =>
-      new Date(match.finishedAt!) > new Date(latest.finishedAt!) ? match : latest,
+      new Date(match.finishedAt!) > new Date(latest.finishedAt!)
+        ? match
+        : latest,
     );
   }, [matchesRaw]);
 
@@ -427,7 +503,8 @@ export function HomePage() {
   );
 
   const playersPerMatch = getPlayersPerMatch(draftMode);
-  const checkinUrl = origin && sessionId ? `${origin}/checkin/${sessionId}` : '';
+  const checkinUrl =
+    origin && sessionId ? `${origin}/checkin/${sessionId}` : '';
   const displayMode =
     activeMatches.length > 0 ? (session?.mode ?? draftMode) : draftMode;
 
@@ -445,14 +522,9 @@ export function HomePage() {
 
     setIsCreatingSession(true);
     try {
-      const name = createName.trim() || formatSessionDate(new Date().toISOString());
-      const created = await createSession(
-        'doubles',
-        createPin,
-        [1],
-        11,
-        name,
-      );
+      const name =
+        createName.trim() || formatSessionDate(new Date().toISOString());
+      const created = await createSession('doubles', createPin, [1], 11, name);
       window.localStorage.setItem(SESSION_STORAGE_KEY, created.id);
       setSessionId(created.id);
       setSession(created);
@@ -460,6 +532,11 @@ export function HomePage() {
       setDraftMode(created.mode);
       setDraftCourts(created.activeCourts.length);
       setDraftTargetScore(created.targetScore);
+      // show the private quick-access link right away, using the PIN we
+      // already have on hand — no need to make them re-type it just to
+      // confirm, unlike the standalone "ลิงก์ส่วนตัว" flow
+      setQuickAccessUrl(`${origin}/?sid=${created.id}&pin=${createPin}`);
+      setIsQuickLinkModalOpen(true);
       setCreatePin('');
       setCreateName('');
       setIsCreateModalOpen(false);
@@ -474,17 +551,41 @@ export function HomePage() {
     }
   };
 
-  /** Enters the PIN gate for a session picked from the "existing sessions"
-   * list on the create screen (mirrors what the localStorage-bootstrap
-   * effect does — remembers the choice on this device, but still requires
-   * the PIN before granting access). */
+  /** Opens the PIN prompt for a session picked from the "existing sessions"
+   * list, as a modal on top of the create screen — doesn't touch
+   * session/sessionId yet, so the list stays visible/usable behind it and
+   * clicking a card never feels like it navigated to a whole new page. */
   const pickExistingSession = (picked: ApiSession) => {
-    window.localStorage.setItem(SESSION_STORAGE_KEY, picked.id);
-    setSessionId(picked.id);
-    setSession(picked);
-    setDraftMode(picked.mode);
-    setDraftCourts(picked.activeCourts.length);
-    setDraftTargetScore(picked.targetScore);
+    setUnlockingSession(picked);
+    setUnlockPinInput('');
+    setUnlockPinError(null);
+  };
+
+  const handleUnlockSession = async () => {
+    if (!unlockingSession) return;
+
+    setIsUnlockingSession(true);
+    setUnlockPinError(null);
+    try {
+      await verifySessionPin(unlockingSession.id, unlockPinInput);
+      window.localStorage.setItem(SESSION_STORAGE_KEY, unlockingSession.id);
+      setSessionId(unlockingSession.id);
+      setSession(unlockingSession);
+      setIsAuthenticated(true);
+      setDraftMode(unlockingSession.mode);
+      setDraftCourts(unlockingSession.activeCourts.length);
+      setDraftTargetScore(unlockingSession.targetScore);
+      setUnlockingSession(null);
+      setUnlockPinInput('');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        setUnlockPinError('PIN ไม่ถูกต้อง');
+      } else {
+        setUnlockPinError(getErrorMessage(error));
+      }
+    } finally {
+      setIsUnlockingSession(false);
+    }
   };
 
   const handleVerifyPin = async () => {
@@ -504,6 +605,96 @@ export function HomePage() {
       }
     } finally {
       setIsVerifyingPin(false);
+    }
+  };
+
+  const openChangePinModal = () => {
+    setChangePinCurrent('');
+    setChangePinNew('');
+    setIsChangePinModalOpen(true);
+  };
+
+  const handleChangePin = async () => {
+    if (!sessionId) return;
+    if (!PIN_PATTERN.test(changePinNew)) {
+      showSnackbar({
+        title: 'PIN ใหม่ไม่ถูกต้อง',
+        description: 'PIN ต้องเป็นตัวเลข 4-6 หลัก',
+        variant: 'error',
+      });
+      return;
+    }
+
+    setIsChangingPin(true);
+    try {
+      await changeSessionPin(sessionId, changePinCurrent, changePinNew);
+      setIsChangePinModalOpen(false);
+      setChangePinCurrent('');
+      setChangePinNew('');
+      showSnackbar({
+        title: 'เปลี่ยน PIN แล้ว',
+        description: 'ใช้ PIN ใหม่ตั้งแต่ครั้งถัดไปที่เข้า session นี้',
+        variant: 'success',
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        showSnackbar({
+          title: 'เปลี่ยน PIN ไม่สำเร็จ',
+          description: 'PIN ปัจจุบันไม่ถูกต้อง',
+          variant: 'error',
+        });
+      } else {
+        showSnackbar({
+          title: 'เปลี่ยน PIN ไม่สำเร็จ',
+          description: getErrorMessage(error),
+          variant: 'error',
+        });
+      }
+    } finally {
+      setIsChangingPin(false);
+    }
+  };
+
+  const openQuickLinkModal = () => {
+    setQuickLinkPin('');
+    setQuickAccessUrl('');
+    setIsQuickLinkModalOpen(true);
+  };
+
+  /** Confirms the PIN (server-side, same as the PIN gate) before embedding
+   * it in a URL — the PIN is never kept in state outside this flow, so
+   * generating the link is the only way to get it back into plain text. */
+  const generateQuickAccessLink = async () => {
+    if (!sessionId) return;
+    if (!PIN_PATTERN.test(quickLinkPin)) {
+      showSnackbar({
+        title: 'PIN ไม่ถูกต้อง',
+        description: 'PIN ต้องเป็นตัวเลข 4-6 หลัก',
+        variant: 'error',
+      });
+      return;
+    }
+
+    setIsGeneratingQuickLink(true);
+    try {
+      await verifySessionPin(sessionId, quickLinkPin);
+      setQuickAccessUrl(`${origin}/?sid=${sessionId}&pin=${quickLinkPin}`);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        showSnackbar({
+          title: 'สร้างลิงก์ไม่สำเร็จ',
+          description: 'PIN ไม่ถูกต้อง',
+          variant: 'error',
+        });
+      } else {
+        showSnackbar({
+          title: 'สร้างลิงก์ไม่สำเร็จ',
+          description: getErrorMessage(error),
+          variant: 'error',
+        });
+      }
+    } finally {
+      setIsGeneratingQuickLink(false);
     }
   };
 
@@ -527,8 +718,12 @@ export function HomePage() {
   const addPlayers = async (names: string[]) => {
     if (!sessionId) return;
 
+    setIsAddingPlayers(true);
     try {
-      const { accepted, duplicates } = await addSessionPlayers(sessionId, names);
+      const { accepted, duplicates } = await addSessionPlayers(
+        sessionId,
+        names,
+      );
       await refreshAll(sessionId);
 
       if (accepted.length > 0 && duplicates.length === 0) {
@@ -554,14 +749,19 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsAddingPlayers(false);
     }
   };
 
   const removePlayer = async (id: string): Promise<boolean> => {
     if (!sessionId) return false;
-    const target = sessionPlayersRaw.find((sessionPlayer) => sessionPlayer.id === id);
+    const target = sessionPlayersRaw.find(
+      (sessionPlayer) => sessionPlayer.id === id,
+    );
     if (!target) return false;
 
+    setDeletingPlayerId(id);
     try {
       await deleteSessionPlayer(sessionId, id);
       await refreshAll(sessionId);
@@ -578,6 +778,8 @@ export function HomePage() {
         variant: 'error',
       });
       return false;
+    } finally {
+      setDeletingPlayerId(null);
     }
   };
 
@@ -586,6 +788,7 @@ export function HomePage() {
     const target = registeredPlayers.find((player) => player.id === id);
     if (!target) return;
 
+    setCheckingInPlayerId(id);
     try {
       await checkInToSession(sessionId, { sessionPlayerId: id });
       await refreshAll(sessionId);
@@ -600,11 +803,15 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setCheckingInPlayerId(null);
     }
   };
 
   const openManagePlayer = (id: string) => {
-    const target = sessionPlayersRaw.find((sessionPlayer) => sessionPlayer.id === id);
+    const target = sessionPlayersRaw.find(
+      (sessionPlayer) => sessionPlayer.id === id,
+    );
     if (!target) return;
 
     setManagePlayerDraft({
@@ -642,6 +849,7 @@ export function HomePage() {
       return;
     }
 
+    setIsSavingPlayerName(true);
     try {
       await renamePlayer(managePlayerDraft.playerId, trimmedName);
       await refreshAll(sessionId);
@@ -657,6 +865,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsSavingPlayerName(false);
     }
   };
 
@@ -693,7 +903,9 @@ export function HomePage() {
     if (!pendingSubstitute || !sessionId) return;
 
     const target = pendingSubstitute;
-    const activeMatch = activeMatches.find((match) => match.court === target.court);
+    const activeMatch = activeMatches.find(
+      (match) => match.court === target.court,
+    );
     if (!activeMatch) {
       setPendingSubstitute(null);
       return;
@@ -723,6 +935,7 @@ export function HomePage() {
       return;
     }
 
+    setIsSubstituting(true);
     try {
       await substituteMatchPlayer(
         sessionId,
@@ -744,6 +957,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsSubstituting(false);
     }
   };
 
@@ -754,6 +969,7 @@ export function HomePage() {
     const activeMatch = activeMatches.find((match) => match.court === court);
     if (!activeMatch) return;
 
+    setPendingCourtAction(court);
     try {
       await updateMatchStatusApi(sessionId, activeMatch.matchId, status);
       await refreshAll(sessionId);
@@ -763,6 +979,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setPendingCourtAction(null);
     }
   };
 
@@ -801,15 +1019,17 @@ export function HomePage() {
     const activeMatch = activeMatches.find((match) => match.court === court);
     if (!activeMatch) return;
 
+    setPendingCourtAction(court);
     try {
       await updateMatchStatusApi(sessionId, activeMatch.matchId, 'done');
 
       if (session.activeCourts.includes(court)) {
-        const [freshPlayers, freshMatches, freshHistoryList] = await Promise.all([
-          listSessionPlayers(sessionId),
-          listMatches(sessionId),
-          getPartnerHistory(sessionId),
-        ]);
+        const [freshPlayers, freshMatches, freshHistoryList] =
+          await Promise.all([
+            listSessionPlayers(sessionId),
+            listMatches(sessionId),
+            getPartnerHistory(sessionId),
+          ]);
         const freshHistory = Object.fromEntries(
           freshHistoryList.map((entry) => [
             entry.pairKey,
@@ -853,11 +1073,17 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setPendingCourtAction(null);
     }
   };
 
   const undoLatestFinishByCourt = async (court: number) => {
-    if (!sessionId || !latestFinishedMatch || latestFinishedMatch.court !== court) {
+    if (
+      !sessionId ||
+      !latestFinishedMatch ||
+      latestFinishedMatch.court !== court
+    ) {
       showSnackbar({
         title: 'ยังย้อนกลับคอร์ดนี้ไม่ได้',
         description: 'ย้อนกลับได้เฉพาะคอร์ดที่กดจบล่าสุด',
@@ -866,6 +1092,7 @@ export function HomePage() {
       return;
     }
 
+    setPendingCourtAction(court);
     try {
       await undoMatchFinish(sessionId, latestFinishedMatch.id);
       await refreshAll(sessionId);
@@ -876,12 +1103,15 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setPendingCourtAction(null);
     }
   };
 
   const closeCourtNow = async (court: number) => {
     if (!sessionId) return;
 
+    setPendingCourtAction(court);
     try {
       await closeCourtApi(sessionId, court);
       await refreshAll(sessionId);
@@ -896,6 +1126,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setPendingCourtAction(null);
     }
   };
 
@@ -926,7 +1158,9 @@ export function HomePage() {
   };
 
   const setPlanDraftTargetScore = (nextTargetScore: number) => {
-    setPlanDraft((prev) => (prev ? { ...prev, targetScore: nextTargetScore } : prev));
+    setPlanDraft((prev) =>
+      prev ? { ...prev, targetScore: nextTargetScore } : prev,
+    );
   };
 
   const togglePlanDraftCourt = (courtId: number) => {
@@ -962,6 +1196,7 @@ export function HomePage() {
       return;
     }
 
+    setIsSavingPlan(true);
     try {
       await updateSession(sessionId, {
         mode: planDraft.mode,
@@ -1045,6 +1280,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsSavingPlan(false);
     }
   };
 
@@ -1079,6 +1316,7 @@ export function HomePage() {
 
     const courtIds = getCourtIds(draftCourts);
 
+    setIsGeneratingMatches(true);
     try {
       await updateSession(sessionId, {
         mode: draftMode,
@@ -1091,7 +1329,10 @@ export function HomePage() {
         getPartnerHistory(sessionId),
       ]);
       const freshHistory = Object.fromEntries(
-        freshHistoryList.map((entry) => [entry.pairKey, entry.timesPlayedTogether]),
+        freshHistoryList.map((entry) => [
+          entry.pairKey,
+          entry.timesPlayedTogether,
+        ]),
       );
       const localPlayers = toEligiblePlayers(freshPlayers);
       const plan: SessionPlan = { mode: draftMode, courtIds };
@@ -1138,12 +1379,15 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsGeneratingMatches(false);
     }
   };
 
   const resetStats = async () => {
     if (!sessionId) return;
 
+    setIsResettingStats(true);
     try {
       await resetSessionStats(sessionId);
       await refreshAll(sessionId);
@@ -1158,6 +1402,8 @@ export function HomePage() {
         description: getErrorMessage(error),
         variant: 'error',
       });
+    } finally {
+      setIsResettingStats(false);
     }
   };
 
@@ -1198,8 +1444,14 @@ export function HomePage() {
     return (
       <div className="min-h-dvh bg-gradient-surface pb-24">
         {isCreateModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-            <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+            onClick={() => setIsCreateModalOpen(false)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+              onClick={(event) => event.stopPropagation()}
+            >
               <div className="mb-1 flex items-center justify-between">
                 <h3 className="font-display text-lg font-extrabold text-foreground">
                   สร้าง session ใหม่
@@ -1246,12 +1498,14 @@ export function HomePage() {
                         handleCreateSession();
                       }
                     }}
+                    type="password"
                     inputMode="numeric"
                     placeholder="เช่น 1234"
                     className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
                   />
                   <p className="text-xs text-muted-foreground">
-                    ใครมี PIN นี้จะจับคู่/จบแมตช์/ปิดคอร์ดได้ เก็บไว้ให้ทีมงานเท่านั้น
+                    ใครมี PIN นี้จะจับคู่/จบแมตช์/ปิดคอร์ดได้
+                    เก็บไว้ให้ทีมงานเท่านั้น
                   </p>
                 </div>
 
@@ -1265,9 +1519,78 @@ export function HomePage() {
                   {isCreatingSession ? 'กำลังสร้าง...' : 'สร้าง session'}
                 </Button>
                 <p className="text-center text-xs text-muted-foreground">
-                  เลือกรูปแบบการแข่งขัน/จำนวนคอร์ด/คะแนนเป้าหมายได้ทีหลัง ก่อนเริ่มจับคู่ครั้งแรก
+                  เลือกรูปแบบการแข่งขัน/จำนวนคอร์ด/คะแนนเป้าหมายได้ทีหลัง
+                  ก่อนเริ่มจับคู่ครั้งแรก
                 </p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {unlockingSession && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+            onClick={() => setUnlockingSession(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="font-display text-lg font-extrabold text-foreground">
+                  ใส่ PIN เพื่อเข้าใช้งาน
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setUnlockingSession(null)}
+                  aria-label="ปิด"
+                  className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <p className="mt-1 text-sm font-semibold text-foreground">
+                {unlockingSession.name}
+              </p>
+              <p className="mt-0.5 text-sm text-muted-foreground">
+                {`${formatModeLabel(unlockingSession.mode)} · ${formatSessionDate(unlockingSession.createdAt)}`}
+              </p>
+
+              <div className="mt-5 space-y-2">
+                <Input
+                  value={unlockPinInput}
+                  onChange={(event) => {
+                    setUnlockPinInput(
+                      event.target.value.replace(/\D/g, '').slice(0, 6),
+                    );
+                    setUnlockPinError(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleUnlockSession();
+                    }
+                  }}
+                  type="password"
+                  inputMode="numeric"
+                  placeholder="ใส่ PIN เพื่อเข้าใช้งาน"
+                  className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+                />
+                {unlockPinError && (
+                  <p className="text-xs font-medium text-destructive">
+                    {unlockPinError}
+                  </p>
+                )}
+              </div>
+
+              <Button
+                type="button"
+                onClick={handleUnlockSession}
+                disabled={isUnlockingSession || unlockPinInput.length === 0}
+                className="mt-4 h-12 w-full rounded-2xl bg-primary font-display font-extrabold text-primary-foreground hover:bg-primary/90"
+              >
+                {isUnlockingSession ? 'กำลังตรวจสอบ...' : 'เข้าใช้งาน'}
+              </Button>
             </div>
           </div>
         )}
@@ -1293,20 +1616,30 @@ export function HomePage() {
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <Link
-                href="/board"
-                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              <div className="hidden items-center gap-1.5 sm:flex">
+                <Link
+                  href="/board"
+                  className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                >
+                  <Newspaper className="h-3.5 w-3.5" />
+                  กระดานข่าว
+                </Link>
+                <Link
+                  href="/how-to-use"
+                  className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
+                  วิธีใช้งาน
+                </Link>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen((open) => !open)}
+                aria-label="เมนู"
+                className="flex h-8 w-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground sm:hidden"
               >
-                <Newspaper className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">กระดานข่าว</span>
-              </Link>
-              <Link
-                href="/how-to-use"
-                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-              >
-                <HelpCircle className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">วิธีใช้งาน</span>
-              </Link>
+                <Menu className="h-4 w-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(true)}
@@ -1318,6 +1651,36 @@ export function HomePage() {
             </div>
           </div>
         </header>
+
+        {/* rendered as a sibling of <header>, not nested inside it — header's
+        backdrop-blur-lg makes it a containing block for fixed descendants,
+        which would clip a fixed inset-0 backdrop to the header's own box */}
+        {isMobileMenuOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-30 sm:hidden"
+              onClick={() => setIsMobileMenuOpen(false)}
+            />
+            <div className="fixed right-3 top-16 z-40 w-48 rounded-2xl border border-border bg-card p-1.5 shadow-dark sm:hidden">
+              <Link
+                href="/board"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition-smooth hover:bg-muted"
+              >
+                <Newspaper className="h-4 w-4 text-muted-foreground" />
+                กระดานข่าว
+              </Link>
+              <Link
+                href="/how-to-use"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition-smooth hover:bg-muted"
+              >
+                <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                วิธีใช้งาน
+              </Link>
+            </div>
+          </>
+        )}
 
         <main className="mx-auto w-full max-w-3xl px-3 py-4 sm:px-6 sm:py-8">
           <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
@@ -1405,58 +1768,65 @@ export function HomePage() {
 
   if (view === 'pin') {
     return (
-      <div className="flex min-h-dvh items-center justify-center bg-gradient-surface px-4">
-        <div className="w-full max-w-md rounded-3xl border border-border bg-card p-6 shadow-soft">
-          <h1 className="font-display text-lg font-extrabold text-foreground">
-            ใส่ PIN เพื่อเข้าใช้งาน
-          </h1>
-          <p className="mt-1 text-sm font-semibold text-foreground">
-            {session?.name}
-          </p>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            {session
-              ? `${formatModeLabel(session.mode)} · ${formatSessionDate(session.createdAt)}`
-              : ''}
-          </p>
+      <div className="min-h-dvh bg-gradient-surface">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+            <h1 className="font-display text-lg font-extrabold text-foreground">
+              ใส่ PIN เพื่อเข้าใช้งาน
+            </h1>
+            <p className="mt-1 text-sm font-semibold text-foreground">
+              {session?.name}
+            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">
+              {session
+                ? `${formatModeLabel(session.mode)} · ${formatSessionDate(session.createdAt)}`
+                : ''}
+            </p>
 
-          <div className="mt-5 space-y-2">
-            <Input
-              value={pinInput}
-              onChange={(event) => {
-                setPinInput(event.target.value.replace(/\D/g, '').slice(0, 6));
-                setPinError(null);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  handleVerifyPin();
-                }
-              }}
-              inputMode="numeric"
-              placeholder="PIN"
-              className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
-            />
-            {pinError && (
-              <p className="text-xs font-medium text-destructive">{pinError}</p>
-            )}
+            <div className="mt-5 space-y-2">
+              <Input
+                value={pinInput}
+                onChange={(event) => {
+                  setPinInput(
+                    event.target.value.replace(/\D/g, '').slice(0, 6),
+                  );
+                  setPinError(null);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    handleVerifyPin();
+                  }
+                }}
+                type="password"
+                inputMode="numeric"
+                placeholder="PIN"
+                className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+              />
+              {pinError && (
+                <p className="text-xs font-medium text-destructive">
+                  {pinError}
+                </p>
+              )}
+            </div>
+
+            <Button
+              type="button"
+              onClick={handleVerifyPin}
+              disabled={isVerifyingPin || pinInput.length === 0}
+              className="mt-4 h-12 w-full rounded-2xl bg-primary font-display font-extrabold text-primary-foreground hover:bg-primary/90"
+            >
+              {isVerifyingPin ? 'กำลังตรวจสอบ...' : 'เข้าใช้งาน'}
+            </Button>
+
+            <button
+              type="button"
+              onClick={forgetSession}
+              className="mt-4 w-full text-center text-xs font-medium text-muted-foreground underline underline-offset-2"
+            >
+              ไม่ใช่ session นี้ เริ่ม session ใหม่
+            </button>
           </div>
-
-          <Button
-            type="button"
-            onClick={handleVerifyPin}
-            disabled={isVerifyingPin || pinInput.length === 0}
-            className="mt-4 h-12 w-full rounded-2xl bg-primary font-display font-extrabold text-primary-foreground hover:bg-primary/90"
-          >
-            {isVerifyingPin ? 'กำลังตรวจสอบ...' : 'เข้าใช้งาน'}
-          </Button>
-
-          <button
-            type="button"
-            onClick={forgetSession}
-            className="mt-4 w-full text-center text-xs font-medium text-muted-foreground underline underline-offset-2"
-          >
-            ไม่ใช่ session นี้ เริ่ม session ใหม่
-          </button>
         </div>
       </div>
     );
@@ -1465,8 +1835,14 @@ export function HomePage() {
   return (
     <div className="min-h-dvh bg-gradient-surface pb-24">
       {managePlayerDraft && managedPlayer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={closeManagePlayer}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
             <h3 className="font-display text-lg font-extrabold text-foreground">
               จัดการผู้เล่น
             </h3>
@@ -1510,8 +1886,12 @@ export function HomePage() {
               <Button
                 type="button"
                 onClick={saveManagedPlayerName}
+                disabled={isSavingPlayerName}
                 className="rounded-xl bg-primary text-primary-foreground"
               >
+                {isSavingPlayerName && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
                 บันทึกชื่อ
               </Button>
             </div>
@@ -1531,9 +1911,15 @@ export function HomePage() {
                 type="button"
                 variant="outline"
                 onClick={deleteManagedPlayer}
-                disabled={Boolean(managedPlayerActiveMatch)}
+                disabled={
+                  Boolean(managedPlayerActiveMatch) ||
+                  deletingPlayerId === managePlayerDraft?.sessionPlayerId
+                }
                 className="mt-2 w-full rounded-xl border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
               >
+                {deletingPlayerId === managePlayerDraft?.sessionPlayerId && (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                )}
                 ลบผู้เล่น
               </Button>
             </div>
@@ -1542,8 +1928,14 @@ export function HomePage() {
       )}
 
       {pendingSubstitute && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setPendingSubstitute(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
             <h3 className="font-display text-lg font-extrabold text-foreground">
               ยืนยันเปลี่ยนตัวผู้เล่น
             </h3>
@@ -1562,8 +1954,10 @@ export function HomePage() {
               <Button
                 type="button"
                 onClick={confirmSubstitute}
+                disabled={isSubstituting}
                 className="rounded-xl bg-primary text-primary-foreground"
               >
+                {isSubstituting && <Loader2 className="h-4 w-4 animate-spin" />}
                 ยืนยันและสุ่มแทน
               </Button>
             </div>
@@ -1572,8 +1966,14 @@ export function HomePage() {
       )}
 
       {pendingCourtClose !== null && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setPendingCourtClose(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
             <h3 className="font-display text-lg font-extrabold text-foreground">
               ยืนยันปิด Court {pendingCourtClose}
             </h3>
@@ -1602,8 +2002,14 @@ export function HomePage() {
       )}
 
       {planDraft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setPlanDraft(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
             <h3 className="font-display text-lg font-extrabold text-foreground">
               ปรับรอบถัดไป
             </h3>
@@ -1612,7 +2018,10 @@ export function HomePage() {
             </p>
 
             <div className="mt-5 space-y-5">
-              <ModeSelector value={planDraft.mode} onChange={setPlanDraftMode} />
+              <ModeSelector
+                value={planDraft.mode}
+                onChange={setPlanDraftMode}
+              />
               <TargetScoreSelector
                 value={planDraft.targetScore}
                 onChange={setPlanDraftTargetScore}
@@ -1665,9 +2074,10 @@ export function HomePage() {
               <Button
                 type="button"
                 onClick={saveNextPlan}
-                disabled={planDraft.courtIds.length === 0}
+                disabled={planDraft.courtIds.length === 0 || isSavingPlan}
                 className="rounded-xl bg-primary text-primary-foreground"
               >
+                {isSavingPlan && <Loader2 className="h-4 w-4 animate-spin" />}
                 บันทึกแผน
               </Button>
             </div>
@@ -1676,8 +2086,14 @@ export function HomePage() {
       )}
 
       {isClearAllConfirmOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setIsClearAllConfirmOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
             <h3 className="font-display text-lg font-extrabold text-foreground">
               ยืนยันออกจาก session นี้
             </h3>
@@ -1706,6 +2122,227 @@ export function HomePage() {
         </div>
       )}
 
+      {isChangePinModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setIsChangePinModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-extrabold text-foreground">
+                เปลี่ยน PIN
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsChangePinModalOpen(false)}
+                aria-label="ปิด"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              ใช้เมื่ออยากเปลี่ยน PIN ของ session นี้ ข้อมูลอื่นในนี้ไม่กระทบ
+            </p>
+
+            <div className="mt-4 space-y-4">
+              <div className="space-y-2">
+                <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  PIN ปัจจุบัน
+                </p>
+                <Input
+                  value={changePinCurrent}
+                  onChange={(event) =>
+                    setChangePinCurrent(
+                      event.target.value.replace(/\D/g, '').slice(0, 6),
+                    )
+                  }
+                  type="password"
+                  inputMode="numeric"
+                  placeholder="PIN ปัจจุบัน"
+                  className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+                />
+              </div>
+              <div className="space-y-2">
+                <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  PIN ใหม่ (4-6 หลัก)
+                </p>
+                <Input
+                  value={changePinNew}
+                  onChange={(event) =>
+                    setChangePinNew(
+                      event.target.value.replace(/\D/g, '').slice(0, 6),
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      handleChangePin();
+                    }
+                  }}
+                  type="password"
+                  inputMode="numeric"
+                  placeholder="PIN ใหม่"
+                  className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+                />
+              </div>
+            </div>
+
+            <div className="mt-5 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setIsChangePinModalOpen(false)}
+                className="rounded-xl"
+              >
+                ยกเลิก
+              </Button>
+              <Button
+                type="button"
+                onClick={handleChangePin}
+                disabled={isChangingPin || !changePinCurrent || !changePinNew}
+                className="rounded-xl bg-primary text-primary-foreground"
+              >
+                {isChangingPin ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                {isChangingPin ? 'กำลังเปลี่ยน...' : 'เปลี่ยน PIN'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isQuickLinkModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+          onClick={() => setIsQuickLinkModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-dark"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-extrabold text-foreground">
+                ลิงก์เข้าใช้งานส่วนตัว
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsQuickLinkModalOpen(false)}
+                aria-label="ปิด"
+                className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">
+              ลิงก์นี้เปิดแล้วเข้า dashboard ได้เลยโดยไม่ต้องพิมพ์ PIN —
+              เก็บไว้ส่วนตัวเท่านั้น (บันทึกในโน้ต/ส่งเข้าแชทตัวเอง)
+              ห้ามแชร์ให้ผู้เล่น เพราะมีค่าเหมือนรู้ PIN ของ session นี้
+            </p>
+
+            {!quickAccessUrl ? (
+              <div className="mt-4 space-y-4">
+                <div className="space-y-2">
+                  <p className="font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    ยืนยัน PIN ปัจจุบันก่อนสร้างลิงก์
+                  </p>
+                  <Input
+                    value={quickLinkPin}
+                    onChange={(event) =>
+                      setQuickLinkPin(
+                        event.target.value.replace(/\D/g, '').slice(0, 6),
+                      )
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        generateQuickAccessLink();
+                      }
+                    }}
+                    type="password"
+                    inputMode="numeric"
+                    placeholder="PIN"
+                    className="h-12 rounded-xl text-center font-display text-lg tracking-[0.3em]"
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => setIsQuickLinkModalOpen(false)}
+                    className="rounded-xl"
+                  >
+                    ยกเลิก
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={generateQuickAccessLink}
+                    disabled={isGeneratingQuickLink || !quickLinkPin}
+                    className="rounded-xl bg-primary text-primary-foreground"
+                  >
+                    {isGeneratingQuickLink ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
+                    {isGeneratingQuickLink ? 'กำลังสร้าง...' : 'สร้างลิงก์'}
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <Input
+                  readOnly
+                  value={quickAccessUrl}
+                  onFocus={(event) => event.currentTarget.select()}
+                  className="h-11 rounded-xl text-xs"
+                />
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(quickAccessUrl);
+                        toast.success('คัดลอกลิงก์แล้ว');
+                      } catch {
+                        toast.error('คัดลอกไม่สำเร็จ');
+                      }
+                    }}
+                    className="h-11 flex-1 rounded-xl text-xs font-bold"
+                  >
+                    คัดลอกลิงก์
+                  </Button>
+                  {typeof navigator !== 'undefined' && 'share' in navigator && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={async () => {
+                        try {
+                          await navigator.share({
+                            title: 'ลิงก์เข้าใช้งานส่วนตัว — Badminton Matcher',
+                            url: quickAccessUrl,
+                          });
+                        } catch {
+                          // ผู้ใช้กดยกเลิก share sheet เอง — ไม่ต้องแจ้ง error
+                        }
+                      }}
+                      className="h-11 shrink-0 rounded-xl px-3 text-xs font-bold"
+                      aria-label="แชร์ลิงก์"
+                    >
+                      <Share2 className="h-3.5 w-3.5" />
+                      แชร์
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <header className="sticky top-0 z-30 border-b border-border/60 bg-background/90 backdrop-blur-lg">
         <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5">
@@ -1729,52 +2366,141 @@ export function HomePage() {
             </div>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            {sessionId && (
+            <div className="hidden items-center gap-1.5 sm:flex">
+              {sessionId && (
+                <Link
+                  href={`/scoreboard/${sessionId}`}
+                  target="_blank"
+                  className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+                >
+                  <Tv className="h-3.5 w-3.5" />
+                  จอคะแนนสด
+                </Link>
+              )}
               <Link
-                href={`/scoreboard/${sessionId}`}
-                target="_blank"
+                href="/board"
                 className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
               >
-                <Tv className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">จอคะแนนสด</span>
+                <Newspaper className="h-3.5 w-3.5" />
+                กระดานข่าว
               </Link>
-            )}
-            <Link
-              href="/board"
-              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-            >
-              <Newspaper className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">กระดานข่าว</span>
-            </Link>
-            <Link
-              href="/how-to-use"
-              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
-            >
-              <HelpCircle className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">วิธีใช้งาน</span>
-            </Link>
+              <Link
+                href="/how-to-use"
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <HelpCircle className="h-3.5 w-3.5" />
+                วิธีใช้งาน
+              </Link>
+              <button
+                type="button"
+                onClick={requestClearAll}
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                ออกจาก session
+              </button>
+            </div>
+
             <button
               type="button"
-              onClick={requestClearAll}
-              className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-smooth hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+              onClick={() => setIsMobileMenuOpen((open) => !open)}
+              aria-label="เมนู"
+              className="flex h-8 w-8 items-center justify-center rounded-full border border-border text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground sm:hidden"
             >
-              <LogOut className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">ออกจาก session</span>
+              <Menu className="h-4 w-4" />
             </button>
           </div>
         </div>
       </header>
 
+      {/* rendered as a sibling of <header>, not nested inside it — header's
+      backdrop-blur-lg makes it a containing block for fixed descendants,
+      which would clip a fixed inset-0 backdrop to the header's own box */}
+      {isMobileMenuOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-30 sm:hidden"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+          <div className="fixed right-3 top-16 z-40 w-52 rounded-2xl border border-border bg-card p-1.5 shadow-dark sm:hidden">
+            {sessionId && (
+              <Link
+                href={`/scoreboard/${sessionId}`}
+                target="_blank"
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition-smooth hover:bg-muted"
+              >
+                <Tv className="h-4 w-4 text-muted-foreground" />
+                จอคะแนนสด
+              </Link>
+            )}
+            <Link
+              href="/board"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition-smooth hover:bg-muted"
+            >
+              <Newspaper className="h-4 w-4 text-muted-foreground" />
+              กระดานข่าว
+            </Link>
+            <Link
+              href="/how-to-use"
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-foreground transition-smooth hover:bg-muted"
+            >
+              <HelpCircle className="h-4 w-4 text-muted-foreground" />
+              วิธีใช้งาน
+            </Link>
+            <button
+              type="button"
+              onClick={() => {
+                setIsMobileMenuOpen(false);
+                requestClearAll();
+              }}
+              className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-medium text-destructive transition-smooth hover:bg-destructive/10"
+            >
+              <LogOut className="h-4 w-4" />
+              ออกจาก session
+            </button>
+          </div>
+        </>
+      )}
+
       <main className="mx-auto w-full max-w-3xl space-y-4 px-3 py-4 sm:space-y-5 sm:px-6 sm:py-8">
         <section className="rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
-          <div className="mb-2 flex items-center gap-2">
-            <Icon icon="mdi:qrcode" width="16" height="16" className="text-muted-foreground" />
-            <h3 className="font-display text-sm font-bold text-foreground">
-              ลิงก์ลงชื่อ/เช็คอินด้วยตัวเอง
-            </h3>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Icon
+                icon="mdi:qrcode"
+                width="16"
+                height="16"
+                className="text-muted-foreground"
+              />
+              <h3 className="font-display text-sm font-bold text-foreground">
+                ลิงก์ลงชื่อ/เช็คอินด้วยตัวเอง
+              </h3>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={openQuickLinkModal}
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <Link2 className="h-3 w-3" />
+                ลิงก์ส่วนตัว
+              </button>
+              <button
+                type="button"
+                onClick={openChangePinModal}
+                className="flex items-center gap-1 rounded-full border border-border px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-smooth hover:bg-muted hover:text-foreground"
+              >
+                <KeyRound className="h-3 w-3" />
+                เปลี่ยน PIN
+              </button>
+            </div>
           </div>
           <p className="mb-3 text-xs text-muted-foreground">
-            ให้ผู้เล่นสแกน QR หรือเปิดลิงก์นี้เพื่อลงชื่อล่วงหน้าหรือเช็คอินเองได้ ไม่ต้องมี PIN
+            ให้ผู้เล่นสแกน QR
+            หรือเปิดลิงก์นี้เพื่อลงชื่อล่วงหน้าหรือเช็คอินเองได้ ไม่ต้องมี PIN
           </p>
           {checkinUrl && (
             <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start">
@@ -1837,8 +2563,8 @@ export function HomePage() {
           <section className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-soft sm:p-6">
             <div className="space-y-5">
               <p className="text-xs font-medium text-muted-foreground">
-                เพิ่มผู้เล่นให้พอสำหรับ 1 แมตช์ก่อน แล้วค่อยเลือก Singles/Doubles
-                กับจำนวนคอร์ด
+                เพิ่มผู้เล่นให้พอสำหรับ 1 แมตช์ก่อน แล้วค่อยเลือก
+                Singles/Doubles กับจำนวนคอร์ด
               </p>
               <ModeSelector value={draftMode} onChange={handleModeChange} />
               <CourtSelector
@@ -1858,6 +2584,7 @@ export function HomePage() {
             players={players}
             onAddMany={addPlayers}
             onManage={openManagePlayer}
+            isAdding={isAddingPlayers}
           />
         </section>
 
@@ -1872,22 +2599,30 @@ export function HomePage() {
               </span>
             </div>
             <p className="mb-3 text-xs text-muted-foreground">
-              ลงชื่อล่วงหน้าไว้ แต่ยังไม่ยืนยันว่าถึงคอร์ดแล้ว — ยังไม่เข้าคิวสุ่มจนกว่าจะเช็คอิน
+              ลงชื่อล่วงหน้าไว้ แต่ยังไม่ยืนยันว่าถึงคอร์ดแล้ว —
+              ยังไม่เข้าคิวสุ่มจนกว่าจะเช็คอิน
             </p>
             <div className="flex flex-wrap gap-2">
-              {registeredPlayers.map((player) => (
-                <button
-                  key={player.id}
-                  type="button"
-                  onClick={() => checkInPlayerNow(player.id)}
-                  className="flex items-center gap-1.5 rounded-full bg-card py-1.5 pl-3 pr-2.5 font-display text-sm font-semibold text-foreground shadow-sm transition-smooth hover:bg-secondary/20"
-                >
-                  {player.name}
-                  <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-secondary-foreground">
-                    เช็คอิน
-                  </span>
-                </button>
-              ))}
+              {registeredPlayers.map((player) => {
+                const isCheckingIn = checkingInPlayerId === player.id;
+                return (
+                  <button
+                    key={player.id}
+                    type="button"
+                    onClick={() => checkInPlayerNow(player.id)}
+                    disabled={isCheckingIn}
+                    className="flex items-center gap-1.5 rounded-full bg-card py-1.5 pl-3 pr-2.5 font-display text-sm font-semibold text-foreground shadow-sm transition-smooth hover:bg-secondary/20 disabled:opacity-60"
+                  >
+                    {player.name}
+                    <span className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-[10px] font-bold text-secondary-foreground">
+                      {isCheckingIn && (
+                        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                      )}
+                      เช็คอิน
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </section>
         )}
@@ -1896,9 +2631,12 @@ export function HomePage() {
           <Button
             type="button"
             onClick={generateMatches}
-            disabled={players.length < playersPerMatch}
+            disabled={players.length < playersPerMatch || isGeneratingMatches}
             className="h-14 w-full rounded-2xl bg-primary font-display text-base font-extrabold text-primary-foreground shadow-glow hover:bg-primary/90"
           >
+            {isGeneratingMatches && (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            )}
             เริ่มจับคู่
           </Button>
         )}
@@ -1919,6 +2657,8 @@ export function HomePage() {
               onUndoCourtFinish={undoLatestFinishByCourt}
               onOpenPlanEditor={openPlanEditor}
               onResetStats={resetStats}
+              isResettingStats={isResettingStats}
+              pendingCourt={pendingCourtAction}
             />
             <div className="mt-4 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 rounded-2xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[11px] text-muted-foreground/90">
               <span className="inline-flex items-center gap-1">

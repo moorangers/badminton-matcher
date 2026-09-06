@@ -19,6 +19,13 @@ export async function createSession(
   await page.getByRole('button', { name: 'สร้าง session', exact: true }).click();
   await page.getByPlaceholder('เช่น 1234').fill(opts.pin ?? '1234');
   await page.getByTestId('submit-create-session').click();
+
+  // creating a session now auto-opens the "quick-access link" modal (has
+  // the PIN baked in already, ready to copy) — dismiss it to get to the
+  // dashboard, same as a real admin would
+  await page.getByRole('heading', { name: 'ลิงก์เข้าใช้งานส่วนตัว' }).waitFor();
+  await page.getByRole('button', { name: 'ปิด', exact: true }).click();
+
   await page.getByPlaceholder(/เพิ่มชื่อผู้เล่น/).waitFor();
 
   if (opts.mode) {
