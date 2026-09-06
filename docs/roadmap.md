@@ -18,7 +18,7 @@
 - [x] API สำหรับ `matches`: `GET/POST /api/sessions/:id/matches`, `PATCH /api/sessions/:id/matches/:matchId` — บังคับกฎ 1 คนไม่อยู่ 2 แมตช์พร้อมกัน, 1 คอร์ดมีได้แค่ 1 แมตช์ที่ยังไม่จบ, `done` จะ bump `matchesPlayedInSession` + partner history ให้อัตโนมัติ (ทดสอบ end-to-end กับ MongoDB จริงแล้ว)
 - [x] API สำหรับ `partnerHistory`: `GET /api/sessions/:id/partner-history` (resolve ชื่อผู้เล่นคืนมาด้วย, เขียนได้ทางเดียวผ่าน side-effect ตอนจบแมตช์เท่านั้น ไม่มี endpoint เขียนตรง)
 - [x] ย้าย UI เดิม (`home-page.tsx`) จาก localStorage มาเรียก API จริง — เสร็จแล้ว (2026-09-06) รวม session bootstrap (สร้าง/PIN gate), algorithm การจับคู่ยังอยู่ฝั่ง client เหมือนเดิม (อ่าน/เขียนผ่าน API แทน localStorage), ลบ `useLocalStorage.ts` ที่ไม่ใช้แล้วออก, ทดสอบ end-to-end ผ่าน Playwright จริง (สร้าง session → เพิ่มผู้เล่น → จับคู่ → เริ่ม/จบแมตช์ → auto-fill → substitute → ปิดคอร์ด → reload+PIN แล้วข้อมูลยังอยู่ครบ) ไม่มี console error
-- [ ] Deploy MongoDB จริงสำหรับ production (ตอนนี้ dev ใช้ container ในเครื่องเท่านั้น ยังไม่มีแผน production DB)
+- [x] Deploy MongoDB จริงสำหรับ production — ใช้ MongoDB Atlas, deploy ผ่าน Vercel (preview branch ทดสอบแล้วใช้งานได้ 2026-09-06) ต้องเปิด Atlas Network Access เป็น `0.0.0.0/0` เพราะ Vercel serverless ไม่มี IP คงที่ และต้องเติมชื่อ database ใน connection string เอง (ไม่งั้น driver จะ default ไปที่ database `test`) — รายละเอียดดู README ส่วน Troubleshooting
 
 ## Phase 1 — แก้ Matching Fairness + Court Merge
 

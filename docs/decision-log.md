@@ -10,7 +10,7 @@
 
 - **วันที่:** 2026-09-06
 - **สถานะ:** decided
-- **Context:** ตอนแรกวางแผนสร้าง `docker-compose.yml` แยกสำหรับโปรเจกต์นี้ แต่พบว่าเครื่อง dev มี container ชื่อ `mongodb` (image `mongo:latest`, user/pass `root`/`password`) รันอยู่แล้วที่ port 27017 ใช้ร่วมกันหลายโปรเจกต์ ถ้าสร้าง compose ใหม่จะชน port กัน
+- **Context:** ตอนแรกวางแผนสร้าง `docker-compose.yml` แยกสำหรับโปรเจกต์นี้ แต่พบว่าเครื่อง dev มี container ชื่อ `mongodb` (image `mongo:latest`) รันอยู่แล้วที่ port 27017 ใช้ร่วมกันหลายโปรเจกต์ ถ้าสร้าง compose ใหม่จะชน port กัน (credential ของ container นี้ไม่เขียนไว้ในเอกสารนี้โดยตั้งใจ — เก็บไว้แค่ใน `.env` ของเครื่อง dev เท่านั้น)
 - **Decision:** ใช้ container ที่มีอยู่แล้ว เชื่อมด้วย database แยกชื่อ `badminton-matcher` (คนละ database จากโปรเจกต์อื่นบน container เดียวกัน เช่น `obstack`) ผ่าน `.env` (ไม่ใช่ `.env.local`) ที่มี `MONGODB_USERNAME`, `MONGODB_PASSWORD`, `MONGODB_URI`
 - **Consequences:** ไม่มี `docker-compose.yml`/`db:up`/`db:down` script ในโปรเจกต์นี้ — เอกสาร setup ต้องบอกให้ผู้เล่นคนอื่นที่ clone repo นี้รู้ว่าต้องมี MongoDB รันเองอยู่แล้ว (local container หรือ Atlas) ก่อน ไม่ได้ auto-provision ให้ — ถ้าย้ายไป production จริงจะใช้ MongoDB Atlas แยกต่างหาก ไม่เกี่ยวกับ container นี้
 

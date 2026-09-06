@@ -157,6 +157,10 @@ yarn dev
 ## Troubleshooting
 
 - **API route ตอบ 404 ทั้งที่ไฟล์ `route.ts` มีอยู่จริง** (โดยเฉพาะถ้าเพิ่งสลับไปมาระหว่าง `yarn build` กับ `yarn dev`) — `.next` cache ค้าง แก้ด้วย `rm -rf .next && yarn dev` ใหม่
+- **Deploy บน Vercel แล้ว MongooseServerSelectionError / connect ไม่ได้** — MongoDB Atlas ยัง whitelist เฉพาะ IP เดิมอยู่ แต่ Vercel serverless function ไม่มี IP คงที่ ต้องไปที่ Atlas → Security → Network Access → Add IP Address → **Allow Access From Anywhere (0.0.0.0/0)** (ยังต้องมี username/password ถูกต้องอยู่ดี ไม่ใช่เปิดโล่งไม่มีการป้องกัน)
+- **ข้อมูลไปโผล่ที่ database ชื่อ `test` แทนที่จะเป็น `badminton-matcher`** — connection string ที่ copy จากปุ่ม "Connect" ใน Atlas ไม่มีชื่อ database อยู่ในนั้น (เช่น `mongodb+srv://user:pass@cluster0.xxx.mongodb.net/?retryWrites=true...`) พอไม่ระบุมา MongoDB driver จะ default ไปที่ database ชื่อ `test` ให้เอง ต้องเติมชื่อ database เข้าไปเองก่อน `?` เช่น `.../badminton-matcher?retryWrites=true...`
+- **แก้ env var บน Vercel แล้วยังไม่มีผล** — Vercel ไม่ auto redeploy เมื่อ env var เปลี่ยน ต้องไปกด Redeploy เองที่แท็บ Deployments
+- **เปิดลิงก์ preview deployment (`*-git-*.vercel.app`) แล้วเด้งไป `vercel.com/sso-api`** — พฤติกรรมปกติของ Vercel, preview deployment ถูก protect ไว้ให้เห็นเฉพาะคนที่ login เข้าทีม Vercel เดียวกัน ถ้าจะแชร์ให้คนนอกทีมดู ต้อง deploy ขึ้น production domain แทน หรือเชิญเขาเข้าทีม Vercel
 
 ## Roadmap v2 (MongoDB Backend)
 
