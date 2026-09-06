@@ -14,6 +14,9 @@ const sessionPlayerSchema = new Schema({
   registeredAt: { type: Date, required: true, default: () => new Date() },
   checkedInAt: { type: Date },
   matchesPlayedInSession: { type: Number, required: true, default: 0 },
+  // เวลาที่ "เริ่มรอคิว" ล่าสุด — ใช้เป็น wait-time fairness tie-breaker
+  // (reset ทุกครั้งที่ลงทะเบียน, จบแมตช์, หรือถูกเปลี่ยนตัวออก)
+  queuedAt: { type: Date, required: true, default: () => new Date() },
 });
 
 sessionPlayerSchema.index({ sessionId: 1, status: 1 });

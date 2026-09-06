@@ -4,6 +4,7 @@ import { connectToDatabase } from '@/lib/db/mongodb';
 import { SessionModel } from '@/lib/db/models/session';
 import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
 import { MatchModel } from '@/lib/db/models/match';
+import { findActiveMatchForPlayers } from '@/lib/db/services/matchLifecycle';
 
 const PLAYERS_PER_TEAM: Record<'singles' | 'doubles', number> = {
   singles: 1,
@@ -37,6 +38,7 @@ export async function GET(
       status: match.status,
       startedAt: match.startedAt ?? null,
       finishedAt: match.finishedAt ?? null,
+      statsCounted: match.statsCounted,
     })),
   );
 }
@@ -104,11 +106,7 @@ export async function POST(
     );
   }
 
-  const busyMatch = await MatchModel.findOne({
-    sessionId: id,
-    status: { $ne: 'done' },
-    $or: [{ teamA: { $in: allPlayerIds } }, { teamB: { $in: allPlayerIds } }],
-  });
+  const busyMatch = await findActiveMatchForPlayers(id, allPlayerIds);
   if (busyMatch) {
     return NextResponse.json(
       { error: 'one or more players are already in an active match' },
@@ -149,6 +147,7 @@ export async function POST(
       teamA: match.teamA.map((playerId) => playerId.toString()),
       teamB: match.teamB.map((playerId) => playerId.toString()),
       status: match.status,
+      statsCounted: match.statsCounted,
     },
     { status: 201 },
   );

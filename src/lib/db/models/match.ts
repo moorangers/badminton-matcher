@@ -14,6 +14,9 @@ const matchSchema = new Schema({
   },
   startedAt: { type: Date },
   finishedAt: { type: Date },
+  // true ถ้า transition ไป 'done' ครั้งนี้ได้ bump matchesPlayedInSession/partnerHistory ไปแล้ว
+  // (ต่างจาก close-court ที่จบแมตช์ status 'ready' โดยไม่นับสถิติ) — ใช้ตอน undo-finish
+  statsCounted: { type: Boolean, required: true, default: false },
 });
 
 matchSchema.index({ sessionId: 1, status: 1 });

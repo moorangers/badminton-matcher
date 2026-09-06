@@ -2,24 +2,9 @@ import { NextResponse } from 'next/server';
 
 import { connectToDatabase } from '@/lib/db/mongodb';
 import { MatchModel } from '@/lib/db/models/match';
-import { SessionPlayerModel } from '@/lib/db/models/sessionPlayer';
-import { PartnerHistoryModel } from '@/lib/db/models/partnerHistory';
+import { applyMatchFinishStats } from '@/lib/db/services/matchLifecycle';
 
 const VALID_STATUSES = ['ready', 'playing', 'done'];
-
-const bumpPartnerHistory = async (
-  sessionId: string,
-  teamPlayerIds: string[],
-) => {
-  if (teamPlayerIds.length !== 2) return;
-
-  const pairKey = [...teamPlayerIds].sort().join('_');
-  await PartnerHistoryModel.findOneAndUpdate(
-    { sessionId, pairKey },
-    { $inc: { timesPlayedTogether: 1 }, $set: { lastPlayedAt: new Date() } },
-    { upsert: true },
-  );
-};
 
 export async function PATCH(
   request: Request,
@@ -52,17 +37,10 @@ export async function PATCH(
   if (nextStatus === 'done' && !wasAlreadyDone) {
     match.finishedAt = new Date();
 
-    const teamAIds = match.teamA.map((playerId) => playerId.toString());
-    const teamBIds = match.teamB.map((playerId) => playerId.toString());
-    const allPlayerIds = [...teamAIds, ...teamBIds];
-
-    await SessionPlayerModel.updateMany(
-      { _id: { $in: allPlayerIds } },
-      { $inc: { matchesPlayedInSession: 1 }, $set: { status: 'resting' } },
-    );
-
-    await bumpPartnerHistory(id, teamAIds);
-    await bumpPartnerHistory(id, teamBIds);
+    if (match.status === 'playing') {
+      await applyMatchFinishStats(id, match);
+      match.statsCounted = true;
+    }
   }
 
   match.status = nextStatus;
@@ -77,5 +55,6 @@ export async function PATCH(
     status: match.status,
     startedAt: match.startedAt ?? null,
     finishedAt: match.finishedAt ?? null,
+    statsCounted: match.statsCounted,
   });
 }
